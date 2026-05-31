@@ -6,6 +6,7 @@ use kira::tween::Tween;
 use std::io::Cursor;
 
 use crate::midi::MidiEngine;
+use crate::midi_stream::MidiStream;
 use crate::source::AudioSource;
 use crate::types::{Volume, Pitch};
 use crate::AudioResult;
@@ -50,6 +51,7 @@ pub struct AudioManager {
     me_handle: Option<StaticSoundHandle>,
     se_handles: Vec<StaticSoundHandle>,
     midi: Option<MidiEngine>,
+    midi_stream: Option<MidiStream>,
     bgm_volume: i32,
 }
 
@@ -75,6 +77,7 @@ impl AudioManager {
             me_handle: None,
             se_handles: Vec::new(),
             midi: None,
+            midi_stream: None,
             bgm_volume: 100,
         })
     }
@@ -263,6 +266,9 @@ impl AudioManager {
         if let Some(mut h) = self.bgm_handle.take() {
             h.stop(Tween::default());
         }
+        if let Some(stream) = self.midi_stream.take() {
+            stream.stop();
+        }
     }
 
     /// Fade BGM to silence over `time_ms` milliseconds, then stop.
@@ -445,6 +451,9 @@ impl AudioManager {
     ///
     /// Mirrors mkxp-z `reset()`.
     pub fn reset(&mut self) {
+        if let Some(stream) = self.midi_stream.take() {
+            stream.stop();
+        }
         self.bgm_stop();
         self.bgs_stop();
         self.me_stop();

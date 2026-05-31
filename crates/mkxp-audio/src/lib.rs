@@ -38,12 +38,14 @@ mod error;
 mod types;
 mod source;
 mod midi;
+mod midi_stream;
 mod manager;
 
 pub use error::AudioError;
 pub use types::{Volume, Pitch, AudioResult};
 pub use source::{AudioSource, AudioFormat};
 pub use midi::MidiEngine;
+pub use midi_stream::MidiStream;
 pub use manager::AudioManager;
 
 #[cfg(test)]

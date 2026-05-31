@@ -434,6 +434,7 @@ Each mkxp-z API surface checked against the mkxp-audio implementation.
 | setupMidi empty SF | FluidSynth runs silent, prints warning | embedded 556-byte silent SF2 | ✓ |
 | midiSoundFont config | `"midiSoundFont": ""` | `midi_soundfont: Option<String>` | ✓ |
 | MIDI loop (CC 111) | hand-written marker parser | `MidiFileLoopType::RpgMaker` | ✓ |
+| MIDI real-time streaming | FluidSynth → OpenAL block streaming | ringbuf + cpal callback (MidiStream) | ✓ |
 | BGM loop | `ALStream::Looped` | `loop_region(..)` | ✓ |
 | reset() | stop all four channels | identical | ✓ |
 
@@ -446,7 +447,6 @@ Each mkxp-z API surface checked against the mkxp-audio implementation.
 | bgmSetVolume layering | Base / BaseRatio / External three-layer volume system | Single-layer |
 | bgmGetVolume | Returns current volume from BaseRatio | Returns last-set value |
 | SE buffer cache | 10 MB LRU cache for decoded SE buffers | No cache (reloads each play) |
-| MIDI real-time streaming | FluidSynth streams to OpenAL in small blocks | Pre-renders entire MIDI to WAV |
 
 ### Source References
 
