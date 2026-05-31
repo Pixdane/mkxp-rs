@@ -172,7 +172,7 @@ mkxp-rs implements this inline (no dedicated thread):
 - `me_stop()` → `restore_bgm_after_me()` sets `bgm_external = 1.0`
 - `tick_me_watch()` on each BGM method call detects natural ME completion
 
-**Note:** mkxp-z's smooth ramp (200ms / 1000ms steps) uses kira's tween engine
+**Note:** mkxp-z's smooth ramp uses kira's tween engine
 in our implementation (`Tween::linear()`), which is handled by the audio
 renderer at the sample level rather than per-frame.  This is a more precise
 equivalent — kira's tween engine interpolates per-sample, not per-frame.
@@ -195,10 +195,10 @@ equivalent — kira's tween engine interpolates per-sample, not per-frame.
 ## 8. Test Coverage
 
 ```
-38 unit tests:  31 passed, 7 ignored (requires audio device in sandbox)
+40 unit tests:  33 passed, 7 ignored (requires audio device in sandbox)
 12 doctests:    11 passed, 1 ignored
 ─────────────────────────────────────────────────────
-Total:          42 passed, 8 ignored = 50
+Total:          44 passed, 8 ignored = 52
 ```
 
 | Module | Unit | Doctest | Focus |
@@ -210,7 +210,7 @@ Total:          42 passed, 8 ignored = 50
 | `midi.rs` | 2 | 2 | Embedded SF2 loading, synthesizer creation |
 | `midi_stream.rs` | 5 | 1 | Ring buffer, stop flag, MidiEngine availability |
 | `se_cache.rs` | 7 | — | LRU get/insert/evict/replace/clear |
-| `manager.rs` | 8 (5 ign) | 3 | resolve_track, WAV encoding, multi-track creation |
+| `manager.rs` | 14 (5 ign) | 3 | resolve_track, WAV encoding, volume layers, ME/BGM interaction |
 
 ---
 
