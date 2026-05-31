@@ -19,7 +19,7 @@ Early development.  The foundation crates are being built module by module.
 | `mkxp-types` | Shared 2D math types (Vec2, Rect, Color, …) | Done |
 | `mkxp-config` | Layered configuration (RON, Game.ini, env, CLI) | Done |
 | `mkxp-fs` | Virtual filesystem (directories, RGSS archives) | Done |
-| `mkxp-audio` | Audio playback (BGM/bgs/me/se, MIDI via rustysynth) | Design |
+| `mkxp-audio` | Audio playback (BGM/bgs/me/se, MIDI via rustysynth) | Done |
 | `mkxp-graphics` | wgpu-based renderer (Bitmap, Sprite, Viewport, …) | Planned |
 | `mkxp-binding` | Ruby MRI integration via magnus | Planned |
 
