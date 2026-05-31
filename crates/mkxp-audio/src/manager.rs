@@ -56,7 +56,8 @@ pub struct AudioManager {
     midi: Option<MidiEngine>,
     midi_stream: Option<MidiStream>,
     se_cache: SeCache,
-    bgm_volume: i32,
+    bgm_base_volumes: Vec<f64>,
+    bgm_ratio: f64,
 }
 
 impl AudioManager {
@@ -76,6 +77,7 @@ impl AudioManager {
 
         let count = bgm_track_count.max(1);
         let mut bgm_tracks = Vec::with_capacity(count);
+        let bgm_base_volumes = vec![1.0f64; count];
         let mut bgm_handles = Vec::with_capacity(count);
         for i in 0..count {
             let track = kira
@@ -97,7 +99,8 @@ impl AudioManager {
             midi: None,
             midi_stream: None,
             se_cache: SeCache::default(),
-            bgm_volume: 100,
+            bgm_base_volumes,
+            bgm_ratio: 1.0,
         })
     }
 
@@ -173,6 +176,19 @@ impl AudioManager {
         }
     }
 
+    /// Compute and apply effective volume for all BGM tracks.
+    /// effective = base[track] * global_ratio.
+    fn apply_bgm_volumes(&mut self) {
+        for (i, handle_opt) in self.bgm_handles.iter_mut().enumerate() {
+            if let Some(handle) = handle_opt {
+                let base = self.bgm_base_volumes.get(i).copied().unwrap_or(1.0);
+                let effective = base * self.bgm_ratio;
+                handle.set_volume(effective, Tween::default());
+            }
+        }
+    }
+
+
     // ── BGM ─────────────────────────────────────────────────────────────
 
     /// Play background music.
@@ -221,19 +237,21 @@ impl AudioManager {
             .kira
             .play(sound.with_settings(settings))
             .map_err(|e| crate::AudioError::device(format!("bgm play: {}", e)))?;
-        handle.set_volume(Volume::new(volume).as_f64(), Tween::default());
+        if let Some(entry) = self.bgm_base_volumes.get_mut(idx) {
+            *entry = Volume::new(volume).as_f64();
+        }
+        self.apply_bgm_volumes();
         if pos > 0.0 {
             handle.seek_to(pos);
         }
         self.bgm_handles[idx] = Some(handle);
-        self.bgm_volume = volume;
         Ok(())
     }
 
     fn bgm_play_midi(
         &mut self,
         source: &AudioSource,
-        volume: i32,
+        _volume: i32,
         _pitch: i32,
         _pos: f64,
     ) -> AudioResult<()> {
@@ -247,7 +265,6 @@ impl AudioManager {
 
         let stream = MidiStream::new(&source.data, engine, true)?;
         self.midi_stream = Some(stream);
-        self.bgm_volume = volume;
         Ok(())
     }
 
@@ -302,30 +319,31 @@ impl AudioManager {
 
     /// Set BGM volume (0–100).
     ///
-    /// * `track = -127`: sets volume on all tracks (using the global ratio).
-    /// * `track >= 0`: sets volume on a single track.
-    pub fn bgm_set_volume(&mut self, volume: i32, track: i32) {
-        self.bgm_volume = volume;
-        let vol = Volume::new(volume);
+    /// Two-layer model matching mkxp-z:
+    /// * `track = -127`: sets the global ratio (applied to all tracks).
+    /// * `track >= 0`: sets the per-track base volume.
+    ///
+    /// Effective volume = `base[track] * ratio`.
+    pub fn bgm_setvolume(&mut self, volume: i32, track: i32) {
+        let vol = Volume::new(volume).as_f64();
         match Self::resolve_track(track, self.bgm_handles.len()) {
-            None => {
-                for h in self.bgm_handles.iter_mut() {
-                    if let Some(handle) = h {
-                        handle.set_volume(vol.as_f64(), Tween::default());
-                    }
-                }
-            }
+            None => { self.bgm_ratio = vol; }
             Some(idx) => {
-                if let Some(ref mut h) = self.bgm_handles[idx] {
-                    h.set_volume(vol.as_f64(), Tween::default());
+                if let Some(entry) = self.bgm_base_volumes.get_mut(idx) {
+                    *entry = vol;
                 }
             }
         }
+        self.apply_bgm_volumes();
     }
 
-    /// Get BGM volume (0–100).  Returns the last-set value.
-    pub fn bgm_get_volume(&self, _track: i32) -> i32 {
-        self.bgm_volume
+    /// Get BGM volume (0–100) for the specified track.
+    ///
+    /// Returns the effective volume: `base[track] * ratio`.
+    pub fn bgm_getvolume(&self, track: i32) -> i32 {
+        let idx = Self::resolve_track(track, self.bgm_handles.len()).unwrap_or(0);
+        let base = self.bgm_base_volumes.get(idx).copied().unwrap_or(1.0);
+        (base * self.bgm_ratio * 100.0) as i32
     }
 
     /// Get BGM playback position in seconds.
@@ -548,10 +566,10 @@ mod tests {
 
     #[ignore = "requires audio device"]
     #[test]
-    fn bgm_volume_clamps() {
+    fn bgmvolume_clamps() {
         let mut audio = AudioManager::new(1, 6).unwrap();
-        audio.bgm_set_volume(150, 0);
-        audio.bgm_set_volume(-10, 0);
+        audio.bgm_setvolume(150, 0);
+        audio.bgm_setvolume(-10, 0);
     }
 
     #[ignore = "requires audio device"]
