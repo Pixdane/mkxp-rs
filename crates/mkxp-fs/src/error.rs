@@ -22,6 +22,10 @@ pub enum FsError {
     #[error("path escapes mount root: {path}")]
     PathEscape { path: String },
 
+    /// The supplied path string is not a valid virtual path.
+    #[error("invalid path: {reason}")]
+    InvalidPath { reason: String },
+
     /// An archive format is unknown or unsupported.
     #[error("unsupported archive format: {0}")]
     UnsupportedArchive(String),
@@ -63,6 +67,13 @@ mod tests {
         } else {
             panic!("wrong variant");
         }
+    }
+
+    #[test]
+    fn invalid_path_display() {
+        let e = FsError::InvalidPath { reason: "contains backslash".into() };
+        assert!(e.to_string().contains("invalid path:"));
+        assert!(e.to_string().contains("backslash"));
     }
 
     #[test]

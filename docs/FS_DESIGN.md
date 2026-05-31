@@ -2,193 +2,183 @@
 
 ## mkxp-z 实现分析
 
-mkxp-z 的文件系统基于 [PhysicsFS](https://icculus.org/physfs/)，共计 1063 行 C++（`src/filesystem/` + `src/crypto/rgssad.cpp`）。
+mkxp-z 的文件系统基于 [PhysicsFS](https://icculus.org/physfs/)，共计 ~800 行 C++
+（`src/filesystem/` 692 行 + `src/crypto/rgssad.cpp` 232 行）。
 
 ### 核心机制
 
-**挂载点系统（Mount Points）。** 调用 `addPath("/path/to/game")` 将游戏目录挂载到
-虚拟目录树的 `/` 根。可以挂载多个目录和档案文件，PhysFS 在读取时按挂载顺序查找：
+**挂载点系统。** `addPath("/path/to/game")` 将游戏目录或加密档案挂载到虚拟目录树
+的 `/` 根。PhysFS 在读取时按挂载顺序查找，后挂载的优先。
 
-```
-PHYSFS_mount("game/", "/", 1)
-PHYSFS_mount("game/Data.rgssad", "/", 1)    // 加密档案也挂到根
-PHYSFS_openRead("Graphics/Titles/title.png")  // 不关心文件在哪个 mount 里
-```
+**RGSS 加密档案。** 三种格式（rgssad / rgss2a / rgss3a）注册为 PhysFS archiver。
+`FileSystem` 构造时调用 `PHYSFS_registerArchiver()` 注册。
 
-挂载是两类来源：
+**openRead 流程。** 这是 mkxp-z 最复杂的方法：
+1. 规范化路径（反斜杠→正斜杠、`.`/`..` 折叠）
+2. 如果 path cache 激活：转小写、拆分为目录+文件名
+3. 用 path cache 的 `fileLists[dir]` 做前缀匹配（快路径），或无 cache 时调
+   `PHYSFS_enumerate()`（慢路径）
+4. **扩展名补全**：前缀匹配后检查下一字符是 `.` 还是 `\0`，决定是否命中
+5. 对每个候选文件调 `OpenHandler::tryRead()`，handler 返回 true 时停止
 
-- **真实目录** — `PHYSFS_mount(path, mountpoint, 1)`
-- **RGSS 加密档案** — `.rgssad` / `.rgss2a` / `.rgss3a` 注册为 PhysFS archiver 插件。
-  `PHYSFS_registerArchiver(&RGSS1_Archiver)` 在 `FileSystem::FileSystem()` 构造时调用。
+**path cache。** 两层结构：
+- `pathCache`：`小写全路径 → 原始大小写路径`
+- `fileLists`：`小写目录路径 → [小写文件名列表]`（加速枚举，避免调 PhysFS）
 
-**文件打开流程（openRead）。** mkxp-z 没有文件名→文件句柄的直接映射。`openRead` 接收
-一个 `OpenHandler` 回调：PhysFS 枚举目录中所有文件名，逐个尝试匹配（前缀匹配 + 扩展名补全）。
-每找到一个匹配项就调 handler 的 `tryRead`，handler 返回 true 时停止搜索。
-这个设计是为了支持"同一文件名、多扩展名"的场景（RPG Maker 的资源引用有时不带扩展名）。
-
-在启用 path cache 时，枚举改为遍历内存中的 `fileLists` map（目录→文件名列表），
-避免每次都调 PhysFS 的文件系统枚举。
-
-**path cache（大小写不敏感）。** Windows 游戏文件名大小写混用。
-Linux/macOS 文件系统区分大小写。mkxp-z 在 `createPathCache()` 中遍历整个
-虚拟目录树，建立 `全小写路径 → 真实大小写路径` 的映射。`openRead` 先将请求路径转小写，
-再查表得到真实路径。
+**RGSS XOR 加密（`crypto/rgssad.cpp`）。** 不是固定 key，而是一个 LCG 序列：
 
 ```cpp
-// filesystem.cpp 简化逻辑
-void FileSystem::createPathCache() {
-    PHYSFS_enumerate("", cacheEnumCB, &data);
-    // cacheEnumCB 回调中:
-    //   strTolower(lowerCase);
-    //   pathCache.insert(lowerCase, mixedCase);
-    //   fileLists[directory].push_back(lowerFilename);
+#define RGSS_MAGIC 0xDEADCAFE
+
+static inline uint32_t advanceMagic(uint32_t &magic) {
+    uint32_t old = magic;
+    magic = magic * 7 + 3;
+    return old;  // 返回旧值用于 XOR
 }
 ```
 
-**RGSS 加密档案（`crypto/rgssad.cpp`）。** 三种格式的加密方式相同：XOR 加密。
-密钥是固定的魔数，不同版本密钥不同。档案文件结构：
+每个 4 字节 dword 与 LCG 当前输出值 XOR，未对齐的剩余字节与当前 magic 的低字节 XOR。
+RGSS1/2 和 RGSS3 共用同一套 `RGSS_ioRead` 解密逻辑。
+
+**RGSS1 / RGSS2（交织格式）。** 两者共享完全相同的内部结构，仅文件扩展名不同。
+Entry header 和 file data 交替排列：
 
 ```
-[4 bytes 魔数] [文件索引表] [文件数据区]
+[Header 8 bytes: "RGSSAD\0\x01"]
+[Entry 1: nameLen(4)+name(n)+size(4)] ← 全部与连续 LCG XOR
+[Entry 1 data: size bytes]            ← 从 data 起始 LCG 快照开始 XOR
+[Entry 2: ...]
+[Entry 2 data: ...]
+...
+[EOF 结束]
 ```
 
-PhysFS archiver 接口要求实现 `openRead`/`read`/`seek`/`tell`/`close` 等底层 I/O 回调。
-mkxp-z 将它们注册为 PhysFS archiver 后，后续文件访问对加密档案完全透明。
-
-### 对外 API
-
-mkxp-z 的 `FileSystem` 类暴露给引擎其他部分的方法：
-
-| 方法 | 用途 |
-|------|------|
-| `addPath(path)` | 挂载目录或档案 |
-| `openRead(handler, filename)` | 打开文件（扩展名补全 + 大小写不敏感） |
-| `openReadRaw(ops, filename)` | 绕开扩展名补全，直接打开 |
-| `exists(filename)` | 检查文件存在 |
-| `createPathCache()` | 建立大小写映射 |
-
-## Rust 实现方案对比
-
-### 方案 A：PhysFS FFI 绑定
-
-使用 `physfs` crate 或自己写 FFI，链接 PhysFS C 库。
+**RGSS3（分离格式）。** 索引用 baseKey XOR 包裹，数据有绝对偏移：
 
 ```
-[优点]
-- 功能完整，行为和 mkxp-z 一致
-- 开发快，直接复用现成的 archiver 机制
-
-[缺点]
-- 引入 C 编译依赖，破坏 pure Rust 承诺
-- 不能编译到 WASM（PhysFS 依赖 POSIX）
-- physfs crate 维护状态不确定（最后更新 2021）
+[Header 8 bytes: "RGSSAD\0\x03"]
+[baseKey: 4 bytes, 读后做 *9+3 变换]
+[Entry: offset(4)+size(4)+key(4)+nameLen(4)+name(n)] ← 全与 baseKey XOR
+...
+[offset=0 → 索引结束]
+[数据区：各文件以绝对偏移排列]
 ```
 
-### 方案 B：纯 Rust 实现（推荐）
+## mkxp-fs 实现对照
 
-从零实现 mount 系统 + RGSS 解码。
+### 设计决策
+
+| 特性 | mkxp-z | mkxp-fs |
+|------|--------|---------|
+| 依赖 | PhysFS (C) | 纯 Rust，零 C 依赖 |
+| 路径规范化 | 接受并折叠 `..`、反斜杠 | VPath 构造时严格拒绝不合规路径 |
+| 扩展名补全 | `openRead` 自动前缀匹配 | **不实现**，由调用方自行处理 |
+| 文件列表缓存 | `fileLists` 加速枚举 | 无（`Mountable::enumerate` 本身已够快） |
+| I/O 模型 | streaming（seek/tell/partial read） | 全量读取（`Vec<u8>`） |
+| mount 语义 | PhysFS mount 优先级 | `Vec` 逆序遍历，后挂载优先 |
+| 错误处理 | C 风格：字符串 + 异常 | 三层 thiserror 模型 |
+
+### 与 mkxp-z 行为一致的模块
+
+| 模块 | 一致性 |
+|------|--------|
+| RGSS XOR | **100% 一致** — `advance_lcg` 逻辑、种子、dword 对齐/未对齐处理 |
+| RGSS1 解析 | **100% 一致** — 连续 LCG 流、entry/data 交织 |
+| RGSS3 解析 | **100% 一致** — baseKey XOR、absolute offset |
+| path_cache 映射 | **一致** — `lower → real` 映射，同样逆序覆盖 |
+| mount 优先级 | **一致** — 后挂载的源先搜索 |
+
+### 与 mkxp-z 有意不同的模块
+
+**`exists()` 实现。** mkxp-z 调 `PHYSFS_exists()` 判断存在性。我们最初错误地将
+`exists()` 委托给 `try_read()`（读完整文件），现已修正为单独的 `try_exists()`，
+仅检查 `Mountable::exists()`。
+
+**无 `fileLists`。** mkxp-z 在 path cache 中额外保存 `directory → [lowercase filenames]`
+映射，目的是避免每次 `openRead` 都调 `PHYSFS_enumerate()`。我们的 `Mountable::enumerate()`
+不涉及 PhysFS 开销（`RealDirectory` 是 OS read_dir，`RgssArchive` 是 HashMap 遍历），
+所以不需要额外缓存。
+
+**无 `desensitize()`。** mkxp-z 提供单独的大小写转换公开方法。我们的 `resolve_path()`
+内联了此逻辑，不单独暴露。
+
+## 当前实现结构
 
 ```
-[优点]
-- 零 C 依赖，编译到 WASM 无障碍
-- 接口可以设计得更 Rust 惯用（Result、bytes、Read trait）
-- 实现量不大（PhysFS 核心约 3000 行 C，RGSS 解码约 200 行）
-
-[缺点]
-- 需要自己实现 mount 优先级查找和 path cache
-- 需要自己处理三种 RGSS 加密格式
+crates/mkxp-fs/src/
+├── lib.rs           (16 行)   — 模块声明 + 重导出
+├── error.rs         (107 行)  — FsError（4 个 crate 独有变体 + #[from] MkxpError）
+├── vpath.rs         (500 行)  — VPath newtype（构造验证 + 7 个方法 + 33 tests）
+├── mountable.rs     (249 行)  — Mountable trait + RealDirectory + 10 tests
+├── filesystem.rs    (362 行)  — FileSystem（mount/read/exists/read_dir/path_cache）+ 11 tests
+├── path_cache.rs    (175 行)  — PathCache（build/resolve）+ 4 tests
+└── rgss.rs          (~650 行) — RgssArchive + LCG XOR + 21 tests
 ```
 
-### 方案 C：`include_dir` + `vfs` crate
-
-使用 Rust 生态已有的虚拟文件系统 crate。
-
-`include_dir` 是编译期嵌入目录树，不支持运行时 mount，不适用。
-`vfs` crate 提供了 mount/read 抽象但只支持物理目录，不支持加密档案。
-
-结论：**方案 B（纯 Rust）** 是正确选择。
-
-## mkxp-fs API 设计
-
-### 核心 trait
+### API 概览
 
 ```rust
-/// 可挂载到文件系统的数据源。
+// ---- VPath ----
+pub struct VPath(String);
+impl VPath {
+    pub fn new(raw: &str) -> Result<Self, FsError>;
+    pub fn as_str(&self) -> &str;
+    pub fn is_root(&self) -> bool;
+    pub fn parent(&self) -> Option<&str>;
+    pub fn file_name(&self) -> Option<&str>;
+    pub fn extension(&self) -> Option<&str>;
+    pub fn join(&self, child: &str) -> Result<Self, FsError>;
+}
+
+// ---- Mountable trait ----
 pub trait Mountable: Send + Sync {
-    fn read(&self, path: &str) -> Result<Vec<u8>, FsError>;
-    fn exists(&self, path: &str) -> bool;
-    fn enumerate(&self, dir: &str) -> Result<Vec<String>, FsError>;
-}
-```
-
-三个内置实现：
-
-```rust
-// 普通目录
-impl Mountable for RealDirectory { ... }
-
-// .zip 压缩包（标准库或 zip crate）
-impl Mountable for ZipArchive { ... }
-
-// .rgssad / .rgss2a / .rgss3a 加密档案
-impl Mountable for RgssArchive { ... }
-```
-
-### 文件系统本体
-
-```rust
-pub struct FileSystem {
-    mounts: Vec<(String, Box<dyn Mountable>)>,  // (mountpoint, source)
-    path_cache: Option<HashMap<String, String>>, // 小写 → 真实路径
+    fn read(&self, path: &VPath) -> Result<Vec<u8>, FsError>;
+    fn exists(&self, path: &VPath) -> bool;
+    fn enumerate(&self, dir: &VPath) -> Result<Vec<String>, FsError>;
 }
 
+// ---- FileSystem ----
+pub struct FileSystem { /* mounts, path_cache */ }
 impl FileSystem {
-    /// 挂载一个数据源到指定路径。
-    pub fn mount(&mut self, path: &str) -> Result<(), FsError>;
-
-    /// 打开文件并返回字节数据。自动查找第一个包含该路径的 mount 源。
-    /// 查询顺序：后挂载的优先（覆写语义）。
+    pub fn new() -> Self;
+    pub fn mount(&mut self, source: Box<dyn Mountable>, mountpoint: &VPath);
     pub fn read(&self, path: &str) -> Result<Vec<u8>, FsError>;
-
-    /// 检查文件是否存在。
     pub fn exists(&self, path: &str) -> bool;
-
-    /// 枚举目录下的所有文件名。
     pub fn read_dir(&self, dir: &str) -> Result<Vec<String>, FsError>;
-
-    /// 建立大小写不敏感的路径缓存。
     pub fn build_path_cache(&mut self) -> Result<(), FsError>;
 }
+
+// ---- RgssArchive ----
+pub struct RgssArchive { /* data, entries, directories */ }
+impl RgssArchive {
+    pub fn parse(raw: Vec<u8>) -> Result<Self, FsError>;
+    pub fn read_file(&self, path: &str) -> Result<Vec<u8>, FsError>;
+    pub fn file_exists(&self, path: &str) -> bool;
+    pub fn enumerate_dir(&self, dir: &str) -> Result<Vec<String>, FsError>;
+}
+
+// ---- PathCache ----
+pub struct PathCache { /* lower_to_real */ }
+impl PathCache {
+    pub fn build(mounts: &[(VPath, Box<dyn Mountable>)]) -> Result<Self, FsError>;
+    pub fn resolve(&self, lower: &str) -> Option<&str>;
+}
 ```
 
-### 设计要点
+### 测试统计
 
-**mount 优先级。** 后挂载的源先查找。例如先 `mount("game/")` 再
-`mount("game/Data.rgssad")`，加密档案中的文件会覆盖真实目录中的同名文件。
-
-**path cache 是可选特性。** 通过 `build_path_cache()` 显式开启。开启后
-`read("graphics/titles/title")` 可以匹配到 `Graphics/Titles/Title.png`。
-
-**不实现扩展名补全。** mkxp-z 的 `openRead` 枚举目录搜索同名不同扩展名的文件。
-这个行为耦合了 PhysFS 的底层回调。在 Rust 版中，由调用方（graphics/audio crate）
-自己处理扩展名补全，fs 层只做精确路径匹配。
-
-**错误类型。** 使用 `mkxp_types::MkxpError` 的 `Io` 变体，不引入新的 error enum。
-
-### Crate 结构
-
-```
-crates/mkxp-fs/
-├── Cargo.toml       # mkxp-types, zip (optional), thiserror
-└── src/
-    ├── lib.rs        # FileSystem struct + mount/read/exists API
-    ├── mountable.rs  # Mountable trait + RealDirectory 实现
-    ├── rgss.rs       # RGSS 加密档案解码 (rgssad/rgss2a/rgss3a)
-    └── path_cache.rs # 大小写不敏感路径映射
-```
+| 模块 | 单元测试 | 文档测试 |
+|------|---------|---------|
+| error | 8 | 0 |
+| vpath | 33 | 7 |
+| mountable | 10 | 0 |
+| filesystem | 11 | 0 |
+| path_cache | 4 | 1 |
+| rgss | 21 | 0 |
+| **合计** | **87** | **8** |
 
 ### 依赖
 
-- `mkxp-types` — `MkxpError`
-- `zip` — zip 文件支持（可选 feature）
-- `encoding_rs` — Shift_JIS 文件名编码转换（RGSS 档案中常见）
+- `mkxp-types` — 共享错误词汇 `MkxpError` + `From<std::io::Error>`
+- `encoding_rs` — Shift_JIS 文件名解码（RGSS 档案）
+- `thiserror` — FsError derive
