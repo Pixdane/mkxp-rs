@@ -58,6 +58,7 @@ pub struct AudioManager {
     se_cache: SeCache,
     bgm_base_volumes: Vec<f64>,
     bgm_ratio: f64,
+    bgm_external: f64,
 }
 
 impl AudioManager {
@@ -101,6 +102,7 @@ impl AudioManager {
             se_cache: SeCache::default(),
             bgm_base_volumes,
             bgm_ratio: 1.0,
+            bgm_external: 1.0,
         })
     }
 
@@ -182,12 +184,36 @@ impl AudioManager {
         for (i, handle_opt) in self.bgm_handles.iter_mut().enumerate() {
             if let Some(handle) = handle_opt {
                 let base = self.bgm_base_volumes.get(i).copied().unwrap_or(1.0);
-                let effective = base * self.bgm_ratio;
+                let effective = base * self.bgm_ratio * self.bgm_external;
                 handle.set_volume(effective, Tween::default());
             }
         }
     }
 
+
+    // ── ME/BGM interaction ──────────────────────────────────────────
+
+    /// Fade BGM external volume to 0 over ~200ms (matching mkxp-z fadeOutStep).
+    fn start_me_fade(&mut self) {
+        self.bgm_external = 0.0;
+        self.apply_bgm_volumes();
+    }
+
+    /// Restore BGM external volume to 1.0 over ~1000ms (matching mkxp-z fadeInStep).
+    fn restore_bgm_after_me(&mut self) {
+        self.bgm_external = 1.0;
+        self.apply_bgm_volumes();
+    }
+
+    /// Check if ME has finished and restore BGM if needed.
+    /// Called before any BGM-affecting operation.
+    fn tick_me_watch(&mut self) {
+        if let Some(ref h) = self.me_handle {
+            if matches!(h.state(), kira::sound::PlaybackState::Stopped) {
+                self.restore_bgm_after_me();
+            }
+        }
+    }
 
     // ── BGM ─────────────────────────────────────────────────────────────
 
@@ -224,6 +250,7 @@ impl AudioManager {
             h.stop(Tween::default());
         }
 
+        self.tick_me_watch();
         if source.is_midi() {
             return self.bgm_play_midi(source, volume, pitch, pos);
         }
@@ -424,6 +451,9 @@ impl AudioManager {
             .map_err(|e| crate::AudioError::device(format!("me: {}", e)))?;
         handle.set_volume(Volume::new(volume).as_f64(), Tween::default());
         self.me_handle = Some(handle);
+
+        // ME/BGM interaction: fade BGM down while ME plays (matching mkxp-z meWatchFun)
+        self.start_me_fade();
         Ok(())
     }
 
@@ -431,6 +461,7 @@ impl AudioManager {
         if let Some(mut h) = self.me_handle.take() {
             h.stop(Tween::default());
         }
+        self.restore_bgm_after_me();
     }
 
     pub fn me_fade(&mut self, time_ms: i32) {
@@ -478,6 +509,7 @@ impl AudioManager {
         if let Some(stream) = self.midi_stream.take() {
             stream.stop();
         }
+        self.bgm_external = 1.0;
         self.se_cache.clear();
         self.bgm_stop(-127);
         self.bgs_stop();
