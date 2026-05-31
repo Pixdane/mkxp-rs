@@ -106,6 +106,8 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 
 ### audio
 
+> **Changes from mkxp-z:** The `midi_synth` config option has been removed (rustysynth is the only MIDI backend). The `soundfont` option has been renamed to `midi_soundfont`.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `master_volume` | `f64` | `1.0` | Master volume multiplier. Range 0.0 to 1.0. |
@@ -113,10 +115,9 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 | `se_volume` | `f64` | `1.0` | SE (sound effect) volume multiplier. |
 | `bgs_volume` | `f64` | `1.0` | BGS (background sound) volume multiplier. |
 | `me_volume` | `f64` | `1.0` | ME (music effect) volume multiplier. |
-| `midi_synth` | MidiSynth | `""` | MIDI synthesiser backend: `""` uses the system default, `"fluidsynth"` and `"timidity"` are software alternatives. |
-| `soundfont` | `Option<String>` | `None` | Path to a SoundFont file for FluidSynth. Only used when `midi_synth` is `"fluidsynth"`. |
-| `midi_chorus` | `bool` | `false` | Enable the MIDI chorus effect (FluidSynth only). |
-| `midi_reverb` | `bool` | `false` | Enable the MIDI reverb effect (FluidSynth only). |
+| `midi_soundfont` | `Option<String>` | `None` | Path to a SoundFont file for MIDI playback. If empty, MIDI plays silently (no crash). |
+| `midi_chorus` | `bool` | `false` | Enable the MIDI chorus effect (rustysynth). |
+| `midi_reverb` | `bool` | `false` | Enable the MIDI reverb effect (rustysynth). |
 | `se_source_count` | `u32` | `6` | Maximum number of simultaneous SE sources. Capped at 64. |
 | `bgm_track_count` | `u32` | `1` | Maximum number of simultaneous BGM tracks. Capped at 16. |
 
@@ -151,34 +152,32 @@ RTP=Standard
 
 ## Environment Variables
 
-Environment variables use the `MKXP_` prefix and have the highest priority among all configuration sources. Boolean values use `"1"` for true and `"0"` for false.
+Environment variables use the `MKXP_` prefix with `__` (double underscore) as the hierarchy separator. For example, `MKXP_WINDOW__TITLE` maps to `window.title`. They have the highest priority among all configuration sources. Boolean values use `"1"` for true and `"0"` for false.
 
 mkxp-z defines 3 environment variables: `MKXPZ_WINDOWS_CONSOLE` (enable a console window), `MKXPZ_MACOS_METAL` (force the Metal renderer), and `MKXPZ_FOLDER_SELECT` (show a folder picker on macOS). All three are platform-specific features. mkxp-rs defines its own set covering common launch parameters.
 
 | Variable | Overrides |
 |----------|-----------|
-| `MKXP_RGSS_VERSION` | `ruby.rgss_version` |
-| `MKXP_CUSTOM_SCRIPT` | `ruby.custom_script` |
-| `MKXP_WINDOW_TITLE` | `window.title` |
-| `MKXP_WINDOW_SIZE` | `window.size` (format `640x480`) |
-| `MKXP_FULLSCREEN` | `window.fullscreen` |
-| `MKXP_RESIZABLE` | `window.resizable` |
-| `MKXP_SCALE_MODE` | `graphics.scale_mode` |
-| `MKXP_VSYNC` | `graphics.vsync` |
-| `MKXP_FRAME_RATE` | `graphics.frame_rate` |
-| `MKXP_GAME_FOLDER` | `paths.game_folder` |
-| `MKXP_FONT_SCALE` | `fonts.scale` |
-| `MKXP_FONT_HINTING` | `fonts.hinting` |
-| `MKXP_FONT_KERNING` | `fonts.kerning` |
-| `MKXP_FONT_OUTLINE_CROP` | `fonts.outline_crop` |
-| `MKXP_MASTER_VOLUME` | `audio.master_volume` |
-| `MKXP_BGM_VOLUME` | `audio.bgm_volume` |
-| `MKXP_SE_VOLUME` | `audio.se_volume` |
-| `MKXP_MIDI_SYNTH` | `audio.midi_synth` |
-| `MKXP_SOUNDFONT` | `audio.soundfont` |
-| `MKXP_DEBUG_MODE` | `debug.mode` |
-| `MKXP_DEBUG_CONSOLE` | `debug.console` |
-| `MKXP_SHOW_FPS` | `debug.show_fps` |
+| `MKXP_RUBY__RGSS_VERSION` | `ruby.rgss_version` |
+| `MKXP_RUBY__CUSTOM_SCRIPT` | `ruby.custom_script` |
+| `MKXP_WINDOW__TITLE` | `window.title` |
+| `MKXP_WINDOW__SIZE` | `window.size` (format `640x480`) |
+| `MKXP_WINDOW__FULLSCREEN` | `window.fullscreen` |
+| `MKXP_WINDOW__RESIZABLE` | `window.resizable` |
+| `MKXP_GRAPHICS__SCALE_MODE` | `graphics.scale_mode` |
+| `MKXP_GRAPHICS__VSYNC` | `graphics.vsync` |
+| `MKXP_GRAPHICS__FRAME_RATE` | `graphics.frame_rate` |
+| `MKXP_PATHS__GAME_FOLDER` | `paths.game_folder` |
+| `MKXP_FONTS__SCALE` | `fonts.scale` |
+| `MKXP_FONTS__HINTING` | `fonts.hinting` |
+| `MKXP_FONTS__KERNING` | `fonts.kerning` |
+| `MKXP_FONTS__OUTLINE_CROP` | `fonts.outline_crop` |
+| `MKXP_AUDIO__MASTER_VOLUME` | `audio.master_volume` |
+| `MKXP_AUDIO__BGM_VOLUME` | `audio.bgm_volume` |
+| `MKXP_AUDIO__MIDI_SOUNDFONT` | `audio.midi_soundfont` |
+| `MKXP_DEBUG__MODE` | `debug.mode` |
+| `MKXP_DEBUG__CONSOLE` | `debug.console` |
+| `MKXP_DEBUG__SHOW_FPS` | `debug.show_fps` |
 
 ---
 
@@ -206,9 +205,7 @@ mkxp-z recognises only three arguments: `debug`, `test`, and `btest` (source: `c
 | `--no-outline-crop` | `fonts.outline_crop` (flag) |
 | `--master-volume <n>` | `audio.master_volume` |
 | `--bgm-volume <n>` | `audio.bgm_volume` |
-| `--se-volume <n>` | `audio.se_volume` |
-| `--midi-synth` | `audio.midi_synth` |
-| `--soundfont <path>` | `audio.soundfont` |
+| `--midi-soundfont <path>` | `audio.midi_soundfont` |
 | `--debug` | `debug.mode` (flag) |
 | `--console` | `debug.console` (flag) |
 | `--show-fps` | `debug.show_fps` |
