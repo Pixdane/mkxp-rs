@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+mkxp-types = { path = "../mkxp-types" }
 config = { version = "0.15", features = ["ron", "ini"] }
 serde = { version = "1", features = ["derive"] }
 merge = "0.1"

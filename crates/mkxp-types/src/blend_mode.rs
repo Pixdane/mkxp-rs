@@ -12,7 +12,7 @@ use crate::MkxpError;
 /// use mkxp_types::BlendMode;
 ///
 /// assert_eq!(BlendMode::Normal as u8, 0);
-/// assert_eq!(BlendMode::try_from(1u8), Ok(BlendMode::Addition));
+/// assert_eq!(BlendMode::try_from(1u8).unwrap(), BlendMode::Addition);
 /// assert!(BlendMode::try_from(99u8).is_err());
 /// ```
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -52,8 +52,8 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        assert_eq!(BlendMode::try_from(BlendMode::Addition as u8), Ok(BlendMode::Addition));
-        assert_eq!(BlendMode::try_from(BlendMode::Multiply as u8), Ok(BlendMode::Multiply));
+        assert_eq!(BlendMode::try_from(BlendMode::Addition as u8).unwrap(), BlendMode::Addition);
+        assert_eq!(BlendMode::try_from(BlendMode::Multiply as u8).unwrap(), BlendMode::Multiply);
     }
 
     #[test]

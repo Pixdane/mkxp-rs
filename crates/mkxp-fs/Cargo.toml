@@ -1,13 +1,10 @@
 [package]
-name = "mkxp-types"
+name = "mkxp-fs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-serde = { workspace = true, optional = true }
+mkxp-types = { path = "../mkxp-types" }
+encoding_rs = "0.8"
 thiserror = "2"
-
-[features]
-default = []
-serde = ["dep:serde"]
