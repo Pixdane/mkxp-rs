@@ -106,6 +106,8 @@ MKXP_* 环境变量              最高优先级
 
 ### audio
 
+> **与 mkxp-z 的差异:** 移除了 `midi_synth` 配置项（rustysynth 是唯一的 MIDI 合成器）。`soundfont` 重命名为 `midi_soundfont`。
+
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `master_volume` | `f64` | `1.0` | 主音量倍率，取值范围 0.0 到 1.0。 |
@@ -113,10 +115,9 @@ MKXP_* 环境变量              最高优先级
 | `se_volume` | `f64` | `1.0` | SE（音效）音量倍率。 |
 | `bgs_volume` | `f64` | `1.0` | BGS（背景环境音）音量倍率。 |
 | `me_volume` | `f64` | `1.0` | ME（音乐效果）音量倍率。 |
-| `midi_synth` | MidiSynth | `""` | MIDI 合成器后端：`""` 使用系统默认，`"fluidsynth"` 和 `"timidity"` 为软件替代方案。 |
-| `soundfont` | `Option<String>` | `None` | FluidSynth 的 SoundFont 文件路径，仅当 `midi_synth` 为 `"fluidsynth"` 时生效。 |
-| `midi_chorus` | `bool` | `false` | 是否启用 MIDI 合唱效果（仅 FluidSynth 支持）。 |
-| `midi_reverb` | `bool` | `false` | 是否启用 MIDI 混响效果（仅 FluidSynth 支持）。 |
+| `midi_soundfont` | `Option<String>` | `None` | MIDI 播放的 SoundFont 文件路径。为空时 MIDI 静音播放。 |
+| `midi_chorus` | `bool` | `false` | 是否启用 MIDI 合唱效果（rustysynth）。 |
+| `midi_reverb` | `bool` | `false` | 是否启用 MIDI 混响效果（rustysynth）。 |
 | `se_source_count` | `u32` | `6` | SE 同时播放的数量上限，最大 64。 |
 | `bgm_track_count` | `u32` | `1` | BGM 同时播放的轨道数上限，最大 16。 |
 
@@ -151,34 +152,32 @@ RTP=Standard
 
 ## 环境变量
 
-环境变量使用 `MKXP_` 前缀，在所有配置来源中优先级最高。布尔值使用 `"1"` 表示 true，`"0"` 表示 false。
+环境变量使用 `MKXP_` 前缀，以 `__`（双下划线）作为层级分隔符。例如 `MKXP_WINDOW__TITLE` 映射到 `window.title`。在所有配置来源中优先级最高。布尔值使用 `"1"` 表示 true，`"0"` 表示 false。
 
 mkxp-z 仅定义了 3 个环境变量：`MKXPZ_WINDOWS_CONSOLE`（启用控制台窗口）、`MKXPZ_MACOS_METAL`（强制 Metal 渲染器）和 `MKXPZ_FOLDER_SELECT`（macOS 上显示文件夹选择器），全部是平台特定功能。mkxp-rs 定义了自己的全套环境变量，覆盖常用启动参数。
 
 | 变量 | 覆盖配置项 |
 |------|-----------|
-| `MKXP_RGSS_VERSION` | `ruby.rgss_version` |
-| `MKXP_CUSTOM_SCRIPT` | `ruby.custom_script` |
-| `MKXP_WINDOW_TITLE` | `window.title` |
-| `MKXP_WINDOW_SIZE` | `window.size`（格式 `640x480`） |
-| `MKXP_FULLSCREEN` | `window.fullscreen` |
-| `MKXP_RESIZABLE` | `window.resizable` |
-| `MKXP_SCALE_MODE` | `graphics.scale_mode` |
-| `MKXP_VSYNC` | `graphics.vsync` |
-| `MKXP_FRAME_RATE` | `graphics.frame_rate` |
-| `MKXP_GAME_FOLDER` | `paths.game_folder` |
-| `MKXP_FONT_SCALE` | `fonts.scale` |
-| `MKXP_FONT_HINTING` | `fonts.hinting` |
-| `MKXP_FONT_KERNING` | `fonts.kerning` |
-| `MKXP_FONT_OUTLINE_CROP` | `fonts.outline_crop` |
-| `MKXP_MASTER_VOLUME` | `audio.master_volume` |
-| `MKXP_BGM_VOLUME` | `audio.bgm_volume` |
-| `MKXP_SE_VOLUME` | `audio.se_volume` |
-| `MKXP_MIDI_SYNTH` | `audio.midi_synth` |
-| `MKXP_SOUNDFONT` | `audio.soundfont` |
-| `MKXP_DEBUG_MODE` | `debug.mode` |
-| `MKXP_DEBUG_CONSOLE` | `debug.console` |
-| `MKXP_SHOW_FPS` | `debug.show_fps` |
+| `MKXP_RUBY__RGSS_VERSION` | `ruby.rgss_version` |
+| `MKXP_RUBY__CUSTOM_SCRIPT` | `ruby.custom_script` |
+| `MKXP_WINDOW__TITLE` | `window.title` |
+| `MKXP_WINDOW__SIZE` | `window.size`（格式 `640x480`） |
+| `MKXP_WINDOW__FULLSCREEN` | `window.fullscreen` |
+| `MKXP_WINDOW__RESIZABLE` | `window.resizable` |
+| `MKXP_GRAPHICS__SCALE_MODE` | `graphics.scale_mode` |
+| `MKXP_GRAPHICS__VSYNC` | `graphics.vsync` |
+| `MKXP_GRAPHICS__FRAME_RATE` | `graphics.frame_rate` |
+| `MKXP_PATHS__GAME_FOLDER` | `paths.game_folder` |
+| `MKXP_FONTS__SCALE` | `fonts.scale` |
+| `MKXP_FONTS__HINTING` | `fonts.hinting` |
+| `MKXP_FONTS__KERNING` | `fonts.kerning` |
+| `MKXP_FONTS__OUTLINE_CROP` | `fonts.outline_crop` |
+| `MKXP_AUDIO__MASTER_VOLUME` | `audio.master_volume` |
+| `MKXP_AUDIO__BGM_VOLUME` | `audio.bgm_volume` |
+| `MKXP_AUDIO__MIDI_SOUNDFONT` | `audio.midi_soundfont` |
+| `MKXP_DEBUG__MODE` | `debug.mode` |
+| `MKXP_DEBUG__CONSOLE` | `debug.console` |
+| `MKXP_DEBUG__SHOW_FPS` | `debug.show_fps` |
 
 ---
 
@@ -206,9 +205,7 @@ mkxp-z 只识别三个参数：`debug`、`test` 和 `btest`（源码 `config.cpp
 | `--no-outline-crop` | `fonts.outline_crop`（flag） |
 | `--master-volume <n>` | `audio.master_volume` |
 | `--bgm-volume <n>` | `audio.bgm_volume` |
-| `--se-volume <n>` | `audio.se_volume` |
-| `--midi-synth` | `audio.midi_synth` |
-| `--soundfont <path>` | `audio.soundfont` |
+| `--midi-soundfont <path>` | `audio.midi_soundfont` |
 | `--debug` | `debug.mode`（flag） |
 | `--console` | `debug.console`（flag） |
 | `--show-fps` | `debug.show_fps` |

@@ -73,13 +73,9 @@ struct Cli {
     #[arg(long)]
     se_volume: Option<f64>,
 
-    /// MIDI synthesiser backend
-    #[arg(long)]
-    midi_synth: Option<String>,
-
     /// FluidSynth SoundFont path
     #[arg(long)]
-    soundfont: Option<String>,
+    midi_soundfont: Option<String>,
 
     /// Enable debug output
     #[arg(long)]
@@ -130,8 +126,7 @@ impl From<Cli> for Config {
                 master_volume: cli.master_volume,
                 bgm_volume: cli.bgm_volume,
                 se_volume: cli.se_volume,
-                midi_synth: cli.midi_synth,
-                soundfont: cli.soundfont,
+                midi_soundfont: cli.midi_soundfont,
                 ..Default::default()
             },
             debug: crate::config::Debug {
@@ -184,8 +179,8 @@ mod tests {
             no_resizable: false, scale_mode: None, no_vsync: false,
             frame_rate: None, font_scale: None, font_hinting: None,
             no_kerning: false, no_outline_crop: false, master_volume: None,
-            bgm_volume: None, se_volume: None, midi_synth: None,
-            soundfont: None, debug: false, console: false, show_fps: None,
+            bgm_volume: None, se_volume: None,
+            midi_soundfont: None, debug: false, console: false, show_fps: None,
         });
         assert!(cfg.ruby.rgss_version.is_none());
         assert!(cfg.window.size.is_none());
