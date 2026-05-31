@@ -9,7 +9,7 @@
 //! # use mkxp_audio::AudioManager;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut audio = AudioManager::new()?;
+//! let mut audio = AudioManager::new(1, 6)?;
 //! audio.setup_midi("")?; // empty = embedded silent SoundFont
 //! # Ok(())
 //! # }
@@ -56,14 +56,14 @@ mod tests {
     #[test]
     #[ignore = "requires audio device"]
     fn audio_manager_creates_and_resets() {
-        let mut audio = AudioManager::new().expect("create AudioManager");
+        let mut audio = AudioManager::new(1, 6).expect("create AudioManager");
         audio.reset(); // should not panic
     }
 
     #[test]
     #[ignore = "requires audio device"]
     fn audio_manager_setup_midi_empty() {
-        let mut audio = AudioManager::new().expect("create AudioManager");
+        let mut audio = AudioManager::new(1, 6).expect("create AudioManager");
         audio.setup_midi("").expect("embedded SF2 should load");
     }
 

@@ -6,8 +6,8 @@ use kira::tween::Tween;
 use std::io::Cursor;
 
 use crate::midi::MidiEngine;
-use crate::se_cache::SeCache;
 use crate::midi_stream::MidiStream;
+use crate::se_cache::SeCache;
 use crate::source::AudioSource;
 use crate::types::{Volume, Pitch};
 use crate::AudioResult;
@@ -20,8 +20,10 @@ use crate::AudioResult;
 /// and ME channels so they can be controlled independently.  SE sounds are
 /// played directly against the main track for automatic concurrency.
 ///
-/// MIDI files are pre-rendered through rustysynth, encoded as WAV, and
-/// played as [`StaticSoundData`].
+/// BGM supports multi-track layering via the `bgm_track_count` parameter.
+/// A `track` value of `-127` addresses all tracks simultaneously.
+///
+/// MIDI files are streamed in real-time through rustysynth + cpal.
 ///
 /// # Usage
 ///
@@ -31,11 +33,11 @@ use crate::AudioResult;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let fs = FileSystem::new();
-/// let mut audio = AudioManager::new()?;
+/// let mut audio = AudioManager::new(1, 6)?;
 /// audio.setup_midi("GMGSx.sf2")?;
 ///
 /// let bgm = AudioSource::from_filesystem(&fs, "Audio/BGM/town.ogg")?;
-/// audio.bgm_play(&bgm, 80, 100, 0.0)?;
+/// audio.bgm_play(&bgm, 80, 100, 0.0, -127)?;
 ///
 /// let se = AudioSource::from_filesystem(&fs, "Audio/SE/sword.ogg")?;
 /// audio.se_play(&se, 100, 100)?;
@@ -44,10 +46,10 @@ use crate::AudioResult;
 /// ```
 pub struct AudioManager {
     kira: KiraManager<DefaultBackend>,
-    bgm_track: Option<TrackHandle>,
+    bgm_tracks: Vec<TrackHandle>,
     bgs_track: Option<TrackHandle>,
     me_track: Option<TrackHandle>,
-    bgm_handle: Option<StaticSoundHandle>,
+    bgm_handles: Vec<Option<StaticSoundHandle>>,
     bgs_handle: Option<StaticSoundHandle>,
     me_handle: Option<StaticSoundHandle>,
     se_handles: Vec<StaticSoundHandle>,
@@ -58,23 +60,37 @@ pub struct AudioManager {
 }
 
 impl AudioManager {
-    /// Create a new audio manager with the system default audio device.
+    /// Create a new audio manager.
+    ///
+    /// * `bgm_track_count` — number of concurrent BGM tracks (mkxp-z default: 1).
+    /// * `se_source_count` — reserved for future SE pool limiting (currently unused).
     ///
     /// ```no_run
-    /// use mkxp_audio::AudioManager;
-    ///
-    /// let audio = AudioManager::new()?;
+    /// # use mkxp_audio::AudioManager;
+    /// let audio = AudioManager::new(1, 6)?;
     /// # Ok::<(), mkxp_audio::AudioError>(())
     /// ```
-    pub fn new() -> AudioResult<Self> {
-        let kira = KiraManager::new(AudioManagerSettings::default())
+    pub fn new(bgm_track_count: usize, _se_source_count: usize) -> AudioResult<Self> {
+        let mut kira = KiraManager::new(AudioManagerSettings::default())
             .map_err(|e| crate::AudioError::device(format!("{}", e)))?;
+
+        let count = bgm_track_count.max(1);
+        let mut bgm_tracks = Vec::with_capacity(count);
+        let mut bgm_handles = Vec::with_capacity(count);
+        for i in 0..count {
+            let track = kira
+                .add_sub_track(TrackBuilder::new())
+                .map_err(|e| crate::AudioError::device(format!("bgm track {}: {}", i, e)))?;
+            bgm_tracks.push(track);
+            bgm_handles.push(None);
+        }
+
         Ok(Self {
             kira,
-            bgm_track: None,
+            bgm_tracks,
             bgs_track: None,
             me_track: None,
-            bgm_handle: None,
+            bgm_handles,
             bgs_handle: None,
             me_handle: None,
             se_handles: Vec::new(),
@@ -87,14 +103,13 @@ impl AudioManager {
 
     /// Initialize the MIDI engine by loading a SoundFont.
     ///
-    /// Mirrors mkxp-z `setupMidi()`.  Call once, before playing any MIDI
-    /// files.  If `soundfont_path` is empty, the embedded silent default
-    /// SoundFont is used — MIDI will play silently but without errors.
+    /// Mirrors mkxp-z `setupMidi()`.  If `soundfont_path` is empty, the
+    /// embedded silent default SoundFont is used.
     ///
     /// ```no_run
     /// # use mkxp_audio::AudioManager;
-    /// let mut audio = AudioManager::new()?;
-    /// audio.setup_midi("")?; // empty = embedded fallback
+    /// let mut audio = AudioManager::new(1, 6)?;
+    /// audio.setup_midi("")?;
     /// # Ok::<(), mkxp_audio::AudioError>(())
     /// ```
     pub fn setup_midi(&mut self, soundfont_path: &str) -> AudioResult<()> {
@@ -113,21 +128,6 @@ impl AudioManager {
         }
         StaticSoundData::from_cursor(Cursor::new(source.data.clone()))
             .map_err(|e| crate::AudioError::device(format!("decode: {}", e)))
-    }
-
-    fn bgm_track_mut(&mut self) -> AudioResult<&mut TrackHandle> {
-        if self.bgm_track.is_none() {
-            let track = self
-                .kira
-                .add_sub_track(TrackBuilder::new())
-                .map_err(|e| crate::AudioError::device(format!("bgm track: {}", e)))?;
-            self.bgm_track = Some(track);
-        }
-        Ok(self.bgm_track.as_mut().unwrap())
-    }
-
-    fn bgm_track_id(&mut self) -> AudioResult<kira::track::TrackId> {
-        Ok(self.bgm_track_mut()?.id())
     }
 
     fn bgs_track_mut(&mut self) -> AudioResult<&mut TrackHandle> {
@@ -153,13 +153,23 @@ impl AudioManager {
     }
 
     fn apply_pitch(sound: StaticSoundData, pitch: Pitch) -> StaticSoundData {
-        let semitones = pitch.as_multiplier();
-        if (semitones - 0.0).abs() > f64::EPSILON {
+        let rate = pitch.as_multiplier();
+        if (rate - 1.0).abs() > f64::EPSILON {
             sound.with_settings(
-                StaticSoundSettings::new().playback_rate(PlaybackRate::Semitones(semitones)),
+                StaticSoundSettings::new().playback_rate(PlaybackRate::Factor(rate)),
             )
         } else {
             sound
+        }
+    }
+
+    /// Resolve the `-127` track specifier to a concrete index.
+    /// Returns `None` for "all tracks".
+    fn resolve_track(track: i32, max: usize) -> Option<usize> {
+        if track == -127 {
+            None // all tracks
+        } else {
+            Some((track.max(0) as usize).min(max.saturating_sub(1)))
         }
     }
 
@@ -167,20 +177,34 @@ impl AudioManager {
 
     /// Play background music.
     ///
-    /// Mirrors mkxp-z `bgmPlay(filename, volume, pitch, pos)`.  If the
-    /// source is a MIDI file, it is pre-rendered through the rustysynth
-    /// pipeline automatically.
+    /// Mirrors mkxp-z `bgmPlay(filename, volume, pitch, pos, track)`.
+    /// * `track = -127`: stops all but track 0, then plays on track 0.
+    /// * `track >= 0`: plays on the specified track index.
     ///
-    /// Stops any currently playing BGM before starting the new track.
-    /// Volume and pitch use mkxp-z conventions: 0–100 and 50–150.
+    /// MIDI files are detected automatically and streamed in real-time.
     pub fn bgm_play(
         &mut self,
         source: &AudioSource,
         volume: i32,
         pitch: i32,
         pos: f64,
+        track: i32,
     ) -> AudioResult<()> {
-        if let Some(mut h) = self.bgm_handle.take() {
+        if track == -127 {
+            // Stop all tracks except 0, then play on track 0
+            for i in 1..self.bgm_handles.len() {
+                if let Some(mut h) = self.bgm_handles[i].take() {
+                    h.stop(Tween::default());
+                }
+            }
+        }
+
+        let idx = if track == -127 { 0 } else {
+            (track.max(0) as usize).min(self.bgm_handles.len().saturating_sub(1))
+        };
+
+        // Stop current sound on this track
+        if let Some(mut h) = self.bgm_handles[idx].take() {
             h.stop(Tween::default());
         }
 
@@ -188,10 +212,9 @@ impl AudioManager {
             return self.bgm_play_midi(source, volume, pitch, pos);
         }
 
-        let track_id = self.bgm_track_id()?;
         let sound = Self::apply_pitch(self.load_static(source)?, Pitch::new(pitch));
         let settings = StaticSoundSettings::new()
-            .output_destination(track_id)
+            .output_destination(self.bgm_tracks[idx].id())
             .loop_region(..);
 
         let mut handle = self
@@ -202,8 +225,8 @@ impl AudioManager {
         if pos > 0.0 {
             handle.seek_to(pos);
         }
+        self.bgm_handles[idx] = Some(handle);
         self.bgm_volume = volume;
-        self.bgm_handle = Some(handle);
         Ok(())
     }
 
@@ -211,110 +234,112 @@ impl AudioManager {
         &mut self,
         source: &AudioSource,
         volume: i32,
-        pitch: i32,
-        pos: f64,
+        _pitch: i32,
+        _pos: f64,
     ) -> AudioResult<()> {
         let engine = self.midi.as_ref().ok_or_else(|| {
             crate::AudioError::midi("no SoundFont loaded (call setup_midi first)")
         })?;
-        let synth = engine.create_synthesizer()?;
-        let mut cursor = Cursor::new(&source.data);
-        let midi = std::sync::Arc::new(
-            rustysynth::MidiFile::new(&mut cursor)
-                .map_err(|e| crate::AudioError::midi(format!("{:?}", e)))?,
-        );
-        let mut seq = rustysynth::MidiFileSequencer::new(synth);
-        seq.play(&midi, true);
 
-        let block = engine.block_size();
-        let mut left = vec![0.0f32; block];
-        let mut right = vec![0.0f32; block];
-        let mut pcm: Vec<f32> = Vec::new();
-        let max_samples = engine.sample_rate() as usize * 300 * 2;
-
-        while !seq.end_of_sequence() && pcm.len() < max_samples {
-            seq.render(&mut left, &mut right);
-            for (&l, &r) in left.iter().zip(right.iter()) {
-                pcm.push(l);
-                pcm.push(r);
-            }
-        }
-
-        let wav = encode_pcm_to_wav(&pcm);
-        let sound = StaticSoundData::from_cursor(Cursor::new(wav))
-            .map_err(|e| crate::AudioError::device(format!("midi decode: {}", e)))?;
-        let sound = Self::apply_pitch(sound, Pitch::new(pitch));
-
-        let track_id = self.bgm_track_id()?;
-        let settings = StaticSoundSettings::new()
-            .output_destination(track_id)
-            .loop_region(..);
-
-        let mut handle = self
-            .kira
-            .play(sound.with_settings(settings))
-            .map_err(|e| crate::AudioError::device(format!("bgm midi: {}", e)))?;
-        handle.set_volume(Volume::new(volume).as_f64(), Tween::default());
-        if pos > 0.0 {
-            handle.seek_to(pos);
-        }
-        self.bgm_handle = Some(handle);
-        Ok(())
-    }
-
-    /// Stop background music immediately.
-    ///
-    /// Mirrors mkxp-z `bgmStop()`.
-    pub fn bgm_stop(&mut self) {
-        if let Some(mut h) = self.bgm_handle.take() {
-            h.stop(Tween::default());
-        }
         if let Some(stream) = self.midi_stream.take() {
             stream.stop();
         }
+
+        let stream = MidiStream::new(&source.data, engine, true)?;
+        self.midi_stream = Some(stream);
+        self.bgm_volume = volume;
+        Ok(())
     }
 
-    /// Fade BGM to silence over `time_ms` milliseconds, then stop.
+    /// Stop BGM.
     ///
-    /// Mirrors mkxp-z `bgmFade(time)`.
-    pub fn bgm_fade(&mut self, time_ms: i32) {
-        if let Some(ref mut h) = self.bgm_handle {
-            h.stop(Tween {
-                duration: std::time::Duration::from_millis(time_ms as u64),
-                ..Default::default()
-            });
+    /// * `track = -127`: stops all tracks.
+    /// * `track >= 0`: stops the specified track.
+    pub fn bgm_stop(&mut self, track: i32) {
+        match Self::resolve_track(track, self.bgm_handles.len()) {
+            None => {
+                for h in self.bgm_handles.iter_mut() {
+                    if let Some(mut handle) = h.take() {
+                        handle.stop(Tween::default());
+                    }
+                }
+                if let Some(stream) = self.midi_stream.take() {
+                    stream.stop();
+                }
+            }
+            Some(idx) => {
+                if let Some(mut h) = self.bgm_handles[idx].take() {
+                    h.stop(Tween::default());
+                }
+            }
+        }
+    }
+
+    /// Fade BGM to silence over `time_ms` milliseconds.
+    ///
+    /// * `track = -127`: fades all tracks.
+    /// * `track >= 0`: fades the specified track.
+    pub fn bgm_fade(&mut self, time_ms: i32, track: i32) {
+        let tween = Tween {
+            duration: std::time::Duration::from_millis(time_ms as u64),
+            ..Default::default()
+        };
+        match Self::resolve_track(track, self.bgm_handles.len()) {
+            None => {
+                for h in self.bgm_handles.iter_mut() {
+                    if let Some(handle) = h {
+                        handle.stop(tween);
+                    }
+                }
+            }
+            Some(idx) => {
+                if let Some(ref mut h) = self.bgm_handles[idx] {
+                    h.stop(tween);
+                }
+            }
         }
     }
 
     /// Set BGM volume (0–100).
     ///
-    /// Mirrors mkxp-z `bgmSetVolume`.
-    pub fn bgm_set_volume(&mut self, volume: i32) {
+    /// * `track = -127`: sets volume on all tracks (using the global ratio).
+    /// * `track >= 0`: sets volume on a single track.
+    pub fn bgm_set_volume(&mut self, volume: i32, track: i32) {
         self.bgm_volume = volume;
-        if let Some(ref mut h) = self.bgm_handle {
-            h.set_volume(Volume::new(volume).as_f64(), Tween::default());
+        let vol = Volume::new(volume);
+        match Self::resolve_track(track, self.bgm_handles.len()) {
+            None => {
+                for h in self.bgm_handles.iter_mut() {
+                    if let Some(handle) = h {
+                        handle.set_volume(vol.as_f64(), Tween::default());
+                    }
+                }
+            }
+            Some(idx) => {
+                if let Some(ref mut h) = self.bgm_handles[idx] {
+                    h.set_volume(vol.as_f64(), Tween::default());
+                }
+            }
         }
     }
 
-    /// Get BGM volume (0–100).
-    ///
-    /// Mirrors mkxp-z `bgmGetVolume`.
-    pub fn bgm_get_volume(&self) -> i32 {
+    /// Get BGM volume (0–100).  Returns the last-set value.
+    pub fn bgm_get_volume(&self, _track: i32) -> i32 {
         self.bgm_volume
     }
 
     /// Get BGM playback position in seconds.
     ///
-    /// Mirrors mkxp-z `bgmPos`.  Returns `0.0` if no BGM is playing.
-    pub fn bgm_pos(&self) -> f64 {
-        self.bgm_handle.as_ref().map_or(0.0, |h| h.position())
+    /// Returns the position of the first active track, or `0.0` if none.
+    pub fn bgm_pos(&self, _track: i32) -> f64 {
+        self.bgm_handles
+            .iter()
+            .find_map(|h| h.as_ref().map(|handle| handle.position()))
+            .unwrap_or(0.0)
     }
 
     // ── BGS ─────────────────────────────────────────────────────────────
 
-    /// Play background sound (ambient, looping).
-    ///
-    /// Mirrors mkxp-z `bgsPlay(filename, volume, pitch, pos)`.
     pub fn bgs_play(
         &mut self,
         source: &AudioSource,
@@ -342,18 +367,12 @@ impl AudioManager {
         Ok(())
     }
 
-    /// Stop background sound.
-    ///
-    /// Mirrors mkxp-z `bgsStop()`.
     pub fn bgs_stop(&mut self) {
         if let Some(mut h) = self.bgs_handle.take() {
             h.stop(Tween::default());
         }
     }
 
-    /// Fade BGS to silence, then stop.
-    ///
-    /// Mirrors mkxp-z `bgsFade(time)`.
     pub fn bgs_fade(&mut self, time_ms: i32) {
         if let Some(ref mut h) = self.bgs_handle {
             h.stop(Tween {
@@ -363,18 +382,12 @@ impl AudioManager {
         }
     }
 
-    /// Get BGS playback position in seconds.
-    ///
-    /// Mirrors mkxp-z `bgsPos`.
     pub fn bgs_pos(&self) -> f64 {
         self.bgs_handle.as_ref().map_or(0.0, |h| h.position())
     }
 
     // ── ME ──────────────────────────────────────────────────────────────
 
-    /// Play a one-shot music effect (auto-stops, no loop).
-    ///
-    /// Mirrors mkxp-z `mePlay(filename, volume, pitch)`.
     pub fn me_play(
         &mut self,
         source: &AudioSource,
@@ -396,18 +409,12 @@ impl AudioManager {
         Ok(())
     }
 
-    /// Stop the music effect.
-    ///
-    /// Mirrors mkxp-z `meStop()`.
     pub fn me_stop(&mut self) {
         if let Some(mut h) = self.me_handle.take() {
             h.stop(Tween::default());
         }
     }
 
-    /// Fade ME to silence, then stop.
-    ///
-    /// Mirrors mkxp-z `meFade(time)`.
     pub fn me_fade(&mut self, time_ms: i32) {
         if let Some(ref mut h) = self.me_handle {
             h.stop(Tween {
@@ -419,26 +426,17 @@ impl AudioManager {
 
     // ── SE ──────────────────────────────────────────────────────────────
 
-    /// Play a sound effect (concurrent with other SEs).
-    ///
-    /// Mirrors mkxp-z `sePlay(filename, volume, pitch)`.  Multiple SEs
-    /// can overlap; kira handles automatic mixing.
     pub fn se_play(
         &mut self,
         source: &AudioSource,
         volume: i32,
         pitch: i32,
     ) -> AudioResult<()> {
-        // Check the SE cache first
-        let data: std::borrow::Cow<[u8]> = match self.se_cache.get(source.path()) {
-            Some(cached) => std::borrow::Cow::Borrowed(cached),
-            None => {
-                self.se_cache.insert(source.path(), source.data.clone());
-                std::borrow::Cow::Borrowed(&source.data)
-            }
-        };
+        if self.se_cache.get(source.path()).is_none() {
+            self.se_cache.insert(source.path(), source.data.clone());
+        }
 
-        let sound = StaticSoundData::from_cursor(Cursor::new(data.into_owned()))
+        let sound = StaticSoundData::from_cursor(Cursor::new(source.data.clone()))
             .map_err(|e| crate::AudioError::device(format!("se decode: {}", e)))?;
         let sound = Self::apply_pitch(sound, Pitch::new(pitch));
         let mut handle = self
@@ -450,9 +448,6 @@ impl AudioManager {
         Ok(())
     }
 
-    /// Stop all sound effects.
-    ///
-    /// Mirrors mkxp-z `seStop()`.
     pub fn se_stop(&mut self) {
         for mut h in self.se_handles.drain(..) {
             h.stop(Tween::default());
@@ -461,15 +456,12 @@ impl AudioManager {
 
     // ── Reset ───────────────────────────────────────────────────────────
 
-    /// Stop all audio (BGM, BGS, ME, and SE).
-    ///
-    /// Mirrors mkxp-z `reset()`.
     pub fn reset(&mut self) {
         if let Some(stream) = self.midi_stream.take() {
             stream.stop();
         }
         self.se_cache.clear();
-        self.bgm_stop();
+        self.bgm_stop(-127);
         self.bgs_stop();
         self.me_stop();
         self.se_stop();
@@ -478,7 +470,7 @@ impl AudioManager {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-/// Encode interleaved stereo `f32` PCM to a 16-bit WAV in memory.
+#[allow(dead_code)]
 fn encode_pcm_to_wav(samples: &[f32]) -> Vec<u8> {
     let data_size = (samples.len() * 2) as u32;
     let mut wav = Vec::with_capacity(44 + data_size as usize);
@@ -508,7 +500,7 @@ mod tests {
 
     #[test]
     fn encode_wav_roundtrip_silence() {
-        let silence = vec![0.0f32; 44100 * 2]; // 1s stereo silence
+        let silence = vec![0.0f32; 44100 * 2];
         let wav = encode_pcm_to_wav(&silence);
         assert!(wav.len() > 44);
         assert_eq!(&wav[0..4], b"RIFF");
@@ -516,33 +508,57 @@ mod tests {
     }
 
     #[test]
+    fn resolve_track_all() {
+        assert_eq!(AudioManager::resolve_track(-127, 4), None);
+    }
+
+    #[test]
+    fn resolve_track_specific() {
+        assert_eq!(AudioManager::resolve_track(2, 4), Some(2));
+    }
+
+    #[test]
+    fn resolve_track_out_of_range_clamps() {
+        assert_eq!(AudioManager::resolve_track(99, 4), Some(3));
+        assert_eq!(AudioManager::resolve_track(-5, 4), Some(0));
+    }
+
     #[ignore = "requires audio device"]
+    #[test]
     fn new_manager_has_no_handles() {
-        let audio = AudioManager::new().unwrap();
-        assert!((audio.bgm_pos() - 0.0).abs() < f64::EPSILON);
+        let audio = AudioManager::new(2, 6).unwrap();
+        assert!((audio.bgm_pos(0) - 0.0).abs() < f64::EPSILON);
         assert!((audio.bgs_pos() - 0.0).abs() < f64::EPSILON);
     }
 
-    #[test]
     #[ignore = "requires audio device"]
+    #[test]
     fn setup_midi_empty_path_works() {
-        let mut audio = AudioManager::new().unwrap();
+        let mut audio = AudioManager::new(1, 6).unwrap();
         audio.setup_midi("").expect("embedded SF2");
     }
 
-    #[test]
     #[ignore = "requires audio device"]
+    #[test]
     fn reset_does_not_panic() {
-        let mut audio = AudioManager::new().unwrap();
+        let mut audio = AudioManager::new(1, 6).unwrap();
         audio.setup_midi("").unwrap();
         audio.reset();
     }
 
-    #[test]
     #[ignore = "requires audio device"]
+    #[test]
     fn bgm_volume_clamps() {
-        let mut audio = AudioManager::new().unwrap();
-        audio.bgm_set_volume(150); // should not panic, just clamp
-        audio.bgm_set_volume(-10);
+        let mut audio = AudioManager::new(1, 6).unwrap();
+        audio.bgm_set_volume(150, 0);
+        audio.bgm_set_volume(-10, 0);
+    }
+
+    #[ignore = "requires audio device"]
+    #[test]
+    fn multi_track_bgm_creation() {
+        let audio = AudioManager::new(4, 6).unwrap();
+        assert_eq!(audio.bgm_handles.len(), 4);
+        assert_eq!(audio.bgm_tracks.len(), 4);
     }
 }

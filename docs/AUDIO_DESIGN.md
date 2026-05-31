@@ -436,16 +436,14 @@ Each mkxp-z API surface checked against the mkxp-audio implementation.
 | MIDI loop (CC 111) | hand-written marker parser | `MidiFileLoopType::RpgMaker` | ✓ |
 | MIDI real-time streaming | FluidSynth → OpenAL block streaming | ringbuf + cpal callback (MidiStream) | ✓ |
 | BGM loop | `ALStream::Looped` | `loop_region(..)` | ✓ |
+| BGM multi-track (`track` param) | `track=-127` stops all, track 0..N | `track=-127`/0..N, bgmPlay/bgmStop/bgmFade all support track | ✓ |
 | reset() | stop all four channels | identical | ✓ |
 
 ### Known Gaps (tracked for future work)
 
 | Gap | mkxp-z behaviour | mkxp-rs status |
 |-----|-----------------|---------------|
-| BGM multi-track (`track` param) | `bgmPlay(f, v, p, pos, track)` with `-127` = "find free" | Single track only |
 | ME/BGM interaction thread | `meWatchFun`: auto-fades BGM when ME plays, restores after | Not implemented |
-| bgmSetVolume layering | Base / BaseRatio / External three-layer volume system | Single-layer |
-| bgmGetVolume | Returns current volume from BaseRatio | Returns last-set value |
 | SE buffer cache | 10 MB LRU cache for decoded OpenAL buffers | LRU cache of encoded bytes (avoids FS re-read) | ✓ |
 
 ### Source References
