@@ -6,6 +6,7 @@ use kira::tween::Tween;
 use std::io::Cursor;
 
 use crate::midi::MidiEngine;
+use crate::se_cache::SeCache;
 use crate::midi_stream::MidiStream;
 use crate::source::AudioSource;
 use crate::types::{Volume, Pitch};
@@ -52,6 +53,7 @@ pub struct AudioManager {
     se_handles: Vec<StaticSoundHandle>,
     midi: Option<MidiEngine>,
     midi_stream: Option<MidiStream>,
+    se_cache: SeCache,
     bgm_volume: i32,
 }
 
@@ -78,6 +80,7 @@ impl AudioManager {
             se_handles: Vec::new(),
             midi: None,
             midi_stream: None,
+            se_cache: SeCache::default(),
             bgm_volume: 100,
         })
     }
@@ -426,7 +429,18 @@ impl AudioManager {
         volume: i32,
         pitch: i32,
     ) -> AudioResult<()> {
-        let sound = Self::apply_pitch(self.load_static(source)?, Pitch::new(pitch));
+        // Check the SE cache first
+        let data: std::borrow::Cow<[u8]> = match self.se_cache.get(source.path()) {
+            Some(cached) => std::borrow::Cow::Borrowed(cached),
+            None => {
+                self.se_cache.insert(source.path(), source.data.clone());
+                std::borrow::Cow::Borrowed(&source.data)
+            }
+        };
+
+        let sound = StaticSoundData::from_cursor(Cursor::new(data.into_owned()))
+            .map_err(|e| crate::AudioError::device(format!("se decode: {}", e)))?;
+        let sound = Self::apply_pitch(sound, Pitch::new(pitch));
         let mut handle = self
             .kira
             .play(sound)
@@ -454,6 +468,7 @@ impl AudioManager {
         if let Some(stream) = self.midi_stream.take() {
             stream.stop();
         }
+        self.se_cache.clear();
         self.bgm_stop();
         self.bgs_stop();
         self.me_stop();

@@ -39,6 +39,7 @@ mod types;
 mod source;
 mod midi;
 mod midi_stream;
+mod se_cache;
 mod manager;
 
 pub use error::AudioError;

@@ -446,7 +446,7 @@ Each mkxp-z API surface checked against the mkxp-audio implementation.
 | ME/BGM interaction thread | `meWatchFun`: auto-fades BGM when ME plays, restores after | Not implemented |
 | bgmSetVolume layering | Base / BaseRatio / External three-layer volume system | Single-layer |
 | bgmGetVolume | Returns current volume from BaseRatio | Returns last-set value |
-| SE buffer cache | 10 MB LRU cache for decoded SE buffers | No cache (reloads each play) |
+| SE buffer cache | 10 MB LRU cache for decoded OpenAL buffers | LRU cache of encoded bytes (avoids FS re-read) | ✓ |
 
 ### Source References
 
