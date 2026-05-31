@@ -66,3 +66,32 @@ A shallow clone is at `/tmp/mkxp-z/`.  Key files:
 - `src/crypto/rgssad.cpp` — RGSS encryption (reference for mkxp-fs)
 - `src/filesystem/filesystem.cpp` — PhysFS-based file system (reference for mkxp-fs)
 - `src/config.cpp` — config loading (reference for mkxp-config)
+
+## Gotchas
+
+### merge crate semantics
+`a.merge(b)` keeps **a's** values and fills gaps from b.  Always merge from
+highest-priority source down to lowest.  The load() function in mkxp-config
+merges CLI first, then env, then user config, etc.  Test this thoroughly.
+
+### config crate requires `#[serde(default)]`
+When using the `config` crate with `try_deserialize::<Config>()`, all missing
+top-level sections cause a "missing field" error even if they're `Option<T>`.
+Add `#[serde(default)]` to every section field.  See `crates/mkxp-config/src/config.rs`.
+
+### Environment variable naming
+The `config` crate's `Environment::with_prefix("MKXP").separator("__")` uses
+`__` (double underscore) as the hierarchy separator.  `MKXP_WINDOW__TITLE` maps
+to `window.title`, not `MKXP_WINDOW_TITLE`.  The config reference docs explain
+the full variable list.
+
+### Game.ini correction
+mkxp-z only reads `Title` and `Scripts` from Game.ini (source: `config.cpp:408-409`).
+It detects RGSS version from the Scripts file extension (`.rxdata`→1, `.rvdata`→2,
+`.rvdata2`→3), not from the `Library` DLL name.  The `RTP` field is never read.
+Our docs in `CONFIG.{zh,en}.md` document this accurately.
+
+### Apply patch does not work locally
+`apply_patch` and `apply_patch_add_file` consistently abort on file writes in this
+workspace.  Use Python heredocs (`python3 << 'PYEOF'`) or `cat > file << 'EOF'`
+to create files.  Avoid `!` in shell strings — zsh interprets it as history expansion.
