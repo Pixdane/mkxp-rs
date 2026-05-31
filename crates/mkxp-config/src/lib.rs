@@ -31,6 +31,8 @@ pub enum SourceError {
     Build(#[from] ::config::ConfigError),
     #[error("failed to parse CLI args: {0}")]
     Cli(String),
+    #[error(transparent)]
+    Mkxp(#[from] mkxp_types::MkxpError),
 }
 
 /// Load configuration from all sources and merge them.
