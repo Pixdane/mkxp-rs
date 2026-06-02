@@ -7,7 +7,7 @@
 //! audio callback.  Constant memory usage (~2 seconds of audio).
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::HeapRb;
+use ringbuf::{HeapRb, traits::{Consumer, Producer, Split}};
 use rustysynth::{MidiFile, MidiFileSequencer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -94,13 +94,13 @@ impl MidiStream {
                 // Interleave into ring buffer (may block if full)
                 for (&l, &r) in left.iter().zip(right.iter()) {
                     // Spin until there's room
-                    while prod.push(l).is_err() {
+                    while prod.try_push(l).is_err() {
                         if stop_clone.load(Ordering::Relaxed) {
                             return;
                         }
                         thread::yield_now();
                     }
-                    while prod.push(r).is_err() {
+                    while prod.try_push(r).is_err() {
                         if stop_clone.load(Ordering::Relaxed) {
                             return;
                         }
@@ -114,8 +114,8 @@ impl MidiStream {
                         for _ in 0..50 {
                             seq.render(&mut left, &mut right);
                             for (&l, &r) in left.iter().zip(right.iter()) {
-                                let _ = prod.push(l);
-                                let _ = prod.push(r);
+                                let _ = prod.try_push(l);
+                                let _ = prod.try_push(r);
                             }
                         }
                         break;
@@ -132,13 +132,13 @@ impl MidiStream {
 
         let config = cpal::StreamConfig {
             channels: 2,
-            sample_rate: cpal::SampleRate(sample_rate),
+            sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
         // The consumer side of the ring buffer needs to be moved into the callback.
         // ringbuf's Consumer is `!Send` in 0.3, so we wrap it in an Arc<Mutex>.
-        let cons = std::sync::Mutex::new(cons);
+        let cons: std::sync::Mutex<_> = std::sync::Mutex::new(cons);
 
         let stream = device
             .build_output_stream(
@@ -183,6 +183,7 @@ impl MidiStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ringbuf::traits::{Consumer, Observer, Producer};
     use crate::MidiEngine;
 
     /// MidiEngine with embedded SF2 creates without panic.
@@ -200,8 +201,8 @@ mod tests {
         let capacity = sample_rate as usize * 2 * 2; // stereo * 2 sec
         let ring = HeapRb::<f32>::new(capacity);
         let (prod, cons) = ring.split();
-        assert_eq!(prod.capacity(), capacity);
-        assert_eq!(cons.capacity(), capacity);
+        assert_eq!(prod.capacity().get(), capacity);
+        assert_eq!(cons.capacity().get(), capacity);
     }
 
     /// Verify the ring buffer split pattern used by MidiStream::new.
@@ -209,11 +210,11 @@ mod tests {
     fn ringbuf_split_producer_consumer() {
         let ring = HeapRb::<f32>::new(1024);
         let (mut prod, mut cons) = ring.split();
-        prod.push(0.5).unwrap();
-        prod.push(-0.3).unwrap();
-        assert_eq!(cons.pop(), Some(0.5));
-        assert_eq!(cons.pop(), Some(-0.3));
-        assert_eq!(cons.pop(), None);
+        prod.try_push(0.5).unwrap();
+        prod.try_push(-0.3).unwrap();
+        assert_eq!(cons.try_pop(), Some(0.5));
+        assert_eq!(cons.try_pop(), Some(-0.3));
+        assert_eq!(cons.try_pop(), None);
     }
 
     /// Ring buffer `push_slice` / `pop_slice` used in streaming.
