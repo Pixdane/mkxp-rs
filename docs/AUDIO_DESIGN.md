@@ -9,10 +9,10 @@ checked for parity.
 
 | Crate | Version | Role |
 |-------|---------|------|
-| `kira` | 0.9.6 | Audio manager, mixing, fade/tween, static sound playback |
-| `cpal` | 0.15.3 | Low-level audio output (real-time MIDI streaming) |
+| `kira` | 0.12.1 | Audio manager, mixing, fade/tween, static sound playback |
+| `cpal` | 0.17.1 | Low-level audio output (real-time MIDI streaming) |
 | `rustysynth` | 1.3.6 | SoundFont loading, MIDI parsing, synthesis |
-| `ringbuf` | 0.3.3 | Lock-free SPSC ring buffer (MIDI render → cpal callback) |
+| `ringbuf` | 0.5.0 | Lock-free SPSC ring buffer (MIDI render → cpal callback) |
 | `symphonia` | 0.5.5 | OGG/MP3/FLAC/WAV decoding (transitive via kira) |
 
 ## Architecture
@@ -133,7 +133,7 @@ applied via `apply_bgm_volumes()` on every volume change.
 | Volume range | `clamp(0, 100)` | `Volume::new(value)` clamps 0-100 |
 | Volume → linear | `value / 100.0` | `Volume::as_f64()` |
 | Pitch range | `clamp(50, 150)` | `Pitch::new(value)` clamps 50-150 |
-| Pitch → linear | `value / 100.0` → `alSourcef(AL_PITCH)` | `Pitch::as_multiplier()` → `PlaybackRate::Factor` |
+| Pitch → linear | `value / 100.0` → `alSourcef(AL_PITCH)` | `Pitch::as_multiplier()` → `PlaybackRate(f64)` |
 | Pitch 150 | 1.5× speed | 1.5× speed ✓ |
 | Pitch 50 | 0.5× speed | 0.5× speed ✓ |
 | Pitch 100 | 1.0× (normal) | 1.0× (normal) ✓ |

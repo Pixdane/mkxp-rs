@@ -21,37 +21,38 @@ Next crate: `mkxp-graphics` (wgpu renderer), then `mkxp-binding` (magnus Ruby MR
 
 ### Tech stack
 ```
-kira 0.9.6   — mixing, sub-tracks, tween (fade), static sound playback
-cpal 0.15.3  — raw audio output for real-time MIDI streaming
+kira 0.12.1   — mixing, sub-tracks, tween (fade), static sound playback
+cpal 0.17.1  — raw audio output for real-time MIDI streaming
 rustysynth 1.3.6 — SoundFont (.sf2) loading + MIDI file parsing + synthesis
-ringbuf 0.3.3 — lock-free SPSC ring buffer (transitive dep of kira, cached)
+ringbuf 0.5.0 — lock-free SPSC ring buffer (direct dep of mkxp-audio)
 symphonia 0.5.5 — OGG/MP3/FLAC/WAV decoding (transitive dep of kira)
 ```
 
-All deps are cached in `~/.cargo/registry`.  `ringbuf 0.4` is **not** cached —
-use `ringbuf = "0.3"` when adding to Cargo.toml.
+All deps are cached in `~/.cargo/registry`.
 
-### kira 0.9 API gotchas
+### kira 0.12 API gotchas
 
-kira 0.9 has a command-queue architecture very different from newer versions.
-**Do not assume the kira 0.12 API.**  Key facts:
+kira 0.12 uses track-based routing — sounds are played **directly on tracks**
+rather than routed via `output_destination`.  Key facts:
 
-- `TrackHandle` is **minimal**: only `set_volume()` and `set_route()`.  No
-  `play()`, `stop()`, `add_effect()`, or `position()`.
-- Play sounds through `AudioManager::play(sound_data)` — returns a
-  `StaticSoundHandle` that has all the control: `set_volume`, `set_playback_rate`,
-  `set_loop_region`, `stop`, `pause`, `resume`, `seek_to`, `position`.
-- `AudioManager::add_sub_track(builder)` creates a mixer sub-track.
-- Route a sound to a specific track via `StaticSoundSettings::output_destination(track_id)`.
-- `main_track()` returns `&mut TrackHandle`, not `MainTrackHandle`.
-- `set_volume()` is **void** (modifies in-place via command queue) — no Result.
-- `start_position()` takes `f64` (seconds), **not** `Duration`.
-- `StaticSoundData` is consumed by `manager.play()` — cannot be reused.
-- There is **no** `effect::pitch_shift` module in kira 0.9.  Use
-  `PlaybackRate::Factor(multiplier)` for pitch changes.
-- `StaticSoundHandle` is **not** `Send` on some backends — don't assert Send on it.
+- `TrackHandle::play(sound_data)` plays a sound on that track — replaces the
+  old `manager.play() + StaticSoundSettings::output_destination(track_id)` pattern.
+- `AudioManager::play(sound_data)` still exists; it delegates to
+  `main_track().play()` and is used for SE sounds (auto-concurrent).
+- `AudioManager` is now generic: `AudioManager<DefaultBackend>`.
+- `Tween`, `PlaybackRate` are re-exported from `kira` root (the `manager`
+  and `tween` modules are private).
+- `TrackHandle::id()` no longer exists — use tracks directly.
+- `set_volume()` takes `impl Into<Value<Decibels>>` — use `amplitude_to_db()`
+  to convert linear amplitude (0.0–1.0) to dB.  See `manager.rs`.
+- `PlaybackRate` is a tuple struct `PlaybackRate(f64)`, not an enum.
+  Old `PlaybackRate::Factor(rate)` → just `PlaybackRate(rate)`.
+- `set_volume()` and `set_playback_rate()` take a `Tween` parameter for
+  smooth transitions.  Works the same as 0.9's `Tween::default()`.
+- `StaticSoundData::from_cursor()` still exists and is the primary way to
+  load audio from in-memory bytes.
 
-Reference: `~/.cargo/registry/src/mirrors.ustc.edu.cn-*/kira-0.9.6/src/`
+Reference: `~/.cargo/registry/src/mirrors.ustc.edu.cn-*/kira-0.12.1/src/`
 
 ### rustysynth API gotchas
 
@@ -297,6 +298,8 @@ A shallow clone is at `/tmp/mkxp-z/`.  Key files for audio:
 ## Gotchas
 
 ### merge crate semantics
+merge 0.2 removes blanket impls for standard library types.  Every `Option<T>`
+field must use `#[merge(strategy = merge::option::overwrite_none)]`.
 `a.merge(b)` keeps **a's** values and fills gaps from b.  Always merge from
 highest-priority source down to lowest.
 

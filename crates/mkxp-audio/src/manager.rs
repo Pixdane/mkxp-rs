@@ -1,8 +1,6 @@
-use kira::manager::{AudioManager as KiraManager, AudioManagerSettings, DefaultBackend};
+use kira::{AudioManager as KiraManager, AudioManagerSettings, DefaultBackend, Tween, PlaybackRate};
 use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings, StaticSoundHandle};
-use kira::sound::PlaybackRate;
 use kira::track::{TrackBuilder, TrackHandle};
-use kira::tween::Tween;
 use std::io::Cursor;
 
 use tracing::{info, warn, debug, trace, error, instrument};
@@ -13,6 +11,17 @@ use crate::se_cache::SeCache;
 use crate::source::AudioSource;
 use crate::types::{Volume, Pitch};
 use crate::AudioResult;
+
+/// Convert linear amplitude (0.0–1.0) to decibels for kira's volume API.
+///
+/// * `0.0` → `Decibels::SILENCE` (-60 dB)
+/// * `1.0` → `Decibels::IDENTITY` (0 dB)
+fn amplitude_to_db(amplitude: f64) -> f32 {
+    if amplitude <= 1e-10 {
+        return -60.0; // Decibels::SILENCE
+    }
+    (20.0 * amplitude.log10()) as f32
+}
 
 /// Main audio manager, mirroring mkxp-z's `Audio` class.
 ///
@@ -75,7 +84,7 @@ impl AudioManager {
     /// # Ok::<(), mkxp_audio::AudioError>(())
     /// ```
     pub fn new(bgm_track_count: usize, _se_source_count: usize) -> AudioResult<Self> {
-        let mut kira = KiraManager::new(AudioManagerSettings::default())
+        let mut kira = KiraManager::<DefaultBackend>::new(AudioManagerSettings::default())
             .map_err(|e| {
                 error!(error = %e, "failed to create kira audio manager");
                 crate::AudioError::device(format!("{}", e))
@@ -176,7 +185,7 @@ impl AudioManager {
         let rate = pitch.as_multiplier();
         if (rate - 1.0).abs() > f64::EPSILON {
             sound.with_settings(
-                StaticSoundSettings::new().playback_rate(PlaybackRate::Factor(rate)),
+                StaticSoundSettings::new().playback_rate(PlaybackRate(rate)),
             )
         } else {
             sound
@@ -201,7 +210,7 @@ impl AudioManager {
                 let base = self.bgm_base_volumes.get(i).copied().unwrap_or(1.0);
                 let effective = base * self.bgm_ratio * self.bgm_external;
                 trace!(track = i, base, ratio = self.bgm_ratio, external = self.bgm_external, effective, "BGM volume applied");
-                handle.set_volume(effective, Tween::default());
+                handle.set_volume(amplitude_to_db(effective), Tween::default());
             }
         }
     }
@@ -275,13 +284,10 @@ impl AudioManager {
         }
 
         let sound = Self::apply_pitch(self.load_static(source)?, Pitch::new(pitch));
-        let settings = StaticSoundSettings::new()
-            .output_destination(self.bgm_tracks[idx].id())
-            .loop_region(..);
-
-        let mut handle = self
-            .kira
-            .play(sound.with_settings(settings))
+        let mut handle = self.bgm_tracks[idx]
+            .play(sound.with_settings(
+                StaticSoundSettings::new().loop_region(..),
+            ))
             .map_err(|e| crate::AudioError::device(format!("bgm play: {}", e)))?;
         if let Some(entry) = self.bgm_base_volumes.get_mut(idx) {
             *entry = Volume::new(volume).as_f64();
@@ -419,16 +425,14 @@ impl AudioManager {
         if let Some(mut h) = self.bgs_handle.take() {
             h.stop(Tween::default());
         }
-        let track_id = self.bgs_track_mut()?.id();
         let sound = Self::apply_pitch(self.load_static(source)?, Pitch::new(pitch));
-        let settings = StaticSoundSettings::new()
-            .output_destination(track_id)
-            .loop_region(..);
-        let mut handle = self
-            .kira
-            .play(sound.with_settings(settings))
+        let track = self.bgs_track_mut()?;
+        let mut handle = track
+            .play(sound.with_settings(
+                StaticSoundSettings::new().loop_region(..),
+            ))
             .map_err(|e| crate::AudioError::device(format!("bgs: {}", e)))?;
-        handle.set_volume(Volume::new(volume).as_f64(), Tween::default());
+        handle.set_volume(amplitude_to_db(Volume::new(volume).as_f64()), Tween::default());
         if pos > 0.0 {
             handle.seek_to(pos);
         }
@@ -470,14 +474,12 @@ impl AudioManager {
         if let Some(mut h) = self.me_handle.take() {
             h.stop(Tween::default());
         }
-        let track_id = self.me_track_mut()?.id();
         let sound = Self::apply_pitch(self.load_static(source)?, Pitch::new(pitch));
-        let settings = StaticSoundSettings::new().output_destination(track_id);
-        let mut handle = self
-            .kira
-            .play(sound.with_settings(settings))
+        let track = self.me_track_mut()?;
+        let mut handle = track
+            .play(sound)
             .map_err(|e| crate::AudioError::device(format!("me: {}", e)))?;
-        handle.set_volume(Volume::new(volume).as_f64(), Tween::default());
+        handle.set_volume(amplitude_to_db(Volume::new(volume).as_f64()), Tween::default());
         self.me_handle = Some(handle);
 
         // ME/BGM interaction: fade BGM down while ME plays (matching mkxp-z meWatchFun)
@@ -524,7 +526,7 @@ impl AudioManager {
             .kira
             .play(sound)
             .map_err(|e| crate::AudioError::device(format!("se: {}", e)))?;
-        handle.set_volume(Volume::new(volume).as_f64(), Tween::default());
+        handle.set_volume(amplitude_to_db(Volume::new(volume).as_f64()), Tween::default());
         self.se_handles.push(handle);
         Ok(())
     }
@@ -605,6 +607,23 @@ mod tests {
     fn resolve_track_out_of_range_clamps() {
         assert_eq!(AudioManager::resolve_track(99, 4), Some(3));
         assert_eq!(AudioManager::resolve_track(-5, 4), Some(0));
+    }
+
+    #[test]
+    fn amplitude_to_db_identity() {
+        assert!((amplitude_to_db(1.0) - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn amplitude_to_db_silence() {
+        assert_eq!(amplitude_to_db(0.0), -60.0);
+    }
+
+    #[test]
+    fn amplitude_to_db_half() {
+        // 20 * log10(0.5) ≈ -6.02
+        let db = amplitude_to_db(0.5);
+        assert!((db - (-6.02)).abs() < 0.1);
     }
 
     #[ignore = "requires audio device"]
