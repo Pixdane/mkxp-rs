@@ -9,6 +9,6 @@ tracing = "0.1"
 mkxp-types = { path = "../mkxp-types" }
 config = { version = "0.15", features = ["ron", "ini"] }
 serde = { version = "1", features = ["derive"] }
-merge = "0.1"
+merge = "0.2"
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"
