@@ -128,8 +128,13 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 | `mode` | `bool` | `false` | Enable debug logging, which prints engine internals to standard output. |
 | `console` | `bool` | `false` | Launch a standalone console window for log output (Windows only). |
 | `show_fps` | FpsDisplay | `"none"` | Where to show the frame rate: `"none"`, `"titlebar"`, `"console"`, or `"both"`. |
+| `log_level` | LogLevel | `None` | Override the log verbosity level: `"error"`, `"warn"`, `"info"`, `"debug"`, or `"trace"`. When set, takes precedence over `mode` for log output. `None` means use `mode` as a shortcut (`false` = info, `true` = debug). |
+
+**Log level precedence.** The `log_level` field provides fine-grained control over log verbosity independent of the binary `mode` flag. When `log_level` is set (e.g. `"trace"`), it always wins. When `log_level` is `None`, the `mode` flag acts as a shortcut: `false` → `info`, `true` → `debug`. This design preserves backward compatibility while allowing CI / development workflows to dial log output up or down without toggling the entire debug mode.
 
 ---
+
+
 
 ## Game.ini
 
@@ -178,6 +183,7 @@ mkxp-z defines 3 environment variables: `MKXPZ_WINDOWS_CONSOLE` (enable a consol
 | `MKXP_DEBUG__MODE` | `debug.mode` |
 | `MKXP_DEBUG__CONSOLE` | `debug.console` |
 | `MKXP_DEBUG__SHOW_FPS` | `debug.show_fps` |
+| `MKXP_DEBUG__LOG_LEVEL` | `debug.log_level` |
 
 ---
 
@@ -209,6 +215,7 @@ mkxp-z recognises only three arguments: `debug`, `test`, and `btest` (source: `c
 | `--debug` | `debug.mode` (flag) |
 | `--console` | `debug.console` (flag) |
 | `--show-fps` | `debug.show_fps` |
+| `--log-level <level>` | `debug.log_level` |
 
 Examples:
 

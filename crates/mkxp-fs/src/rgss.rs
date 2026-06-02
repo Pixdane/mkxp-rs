@@ -120,7 +120,7 @@ impl RgssArchive {
 
         let header = &raw[..8];
 
-        if header == RGSS1_HEADER || header == RGSS2_HEADER {
+        let result = if header == RGSS1_HEADER || header == RGSS2_HEADER {
             Self::parse_rgss1(raw)
         } else if header == RGSS3_HEADER {
             Self::parse_rgss3(raw)
@@ -128,7 +128,13 @@ impl RgssArchive {
             Err(FsError::UnsupportedArchive(format!(
                 "unknown RGSS header: {:02X?}", header
             )))
+        };
+
+        if let Ok(ref archive) = result {
+            tracing::info!(files = archive.file_count(), "parsed RGSS archive");
         }
+
+        result
     }
 
     /// Read and decrypt a file from the archive.

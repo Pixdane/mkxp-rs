@@ -9,6 +9,8 @@
 //! Cache eviction is LRU: the least recently used entry is evicted when the
 //! total stored size exceeds `max_bytes`.
 
+use tracing::debug;
+
 use std::collections::{HashMap, VecDeque};
 
 /// Default cache size matching mkxp-z's `SE_CACHE_MEM` (10 MB).
@@ -49,6 +51,7 @@ impl SeCache {
             self.order.push_front(path.to_string());
             Some(self.entries[path].as_slice())
         } else {
+            debug!(path, "SE cache miss");
             None
         }
     }
@@ -72,6 +75,10 @@ impl SeCache {
             if let Some(evict_path) = self.order.pop_back() {
                 if let Some(evicted) = self.entries.remove(&evict_path) {
                     self.current_bytes = self.current_bytes.saturating_sub(evicted.len());
+                    debug!(path = %evict_path, evicted_bytes = evicted.len(),
+                        current_mb = self.current_bytes as f64 / 1_048_576.0,
+                        max_mb = self.max_bytes as f64 / 1_048_576.0,
+                        "SE cache eviction");
                 }
             }
         }

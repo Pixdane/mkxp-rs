@@ -13,6 +13,7 @@ cross-platform runtime for RPG Maker XP / VX / VX Ace games.  Licensed GPL-2.0.
 | `mkxp-config` | `crates/mkxp-config/` | 12 unit + 3 doc | 5-layer config loading (CLI > env > user > game RON > Game.ini). Uses `config` crate. |
 | `mkxp-fs` | `crates/mkxp-fs/` | 85 unit + 9 doc | VPath, Mountable trait, FileSystem, RgssArchive, PathCache. Pure Rust, no C deps. |
 | `mkxp-audio` | `crates/mkxp-audio/` | 40 unit + 12 doc | BGM/BGS/ME/SE + MIDI. kira (mixing) + rustysynth (SoundFont MIDI). Zero C deps. |
+| `mkxp-log` | `crates/mkxp-log/` | 23 unit + 13 doc | tracing-based logger. `MkxpLayer` (ISO 8601 + span lifecycle). EnvFilter, Composite targets, From<&Config>. |
 
 Next crate: `mkxp-graphics` (wgpu renderer), then `mkxp-binding` (magnus Ruby MRI).
 
@@ -158,6 +159,99 @@ validated newtype over `String`.  Never use `std::path::Path` for virtual paths.
 - `if let Some(ref mut x) = &mut y` — the `ref mut` is **redundant** in edition 2024.
   Just use `if let Some(x) = y` when matching on `&mut Option<T>`.
   The compiler will suggest removing `ref mut`.
+
+## Logging crate — things to know before working on it
+
+### Architecture
+```
+tracing (facade macros)      ←  used by all product crates
+    ↑
+mkxp-log crate               ←  subscriber impl, only linked in binary
+    ↑
+tracing-subscriber           ←  Layer + EnvFilter + registry
+```
+
+Every product crate (`mkxp-config`, `mkxp-fs`, `mkxp-audio`) depends on
+`tracing = "0.1"` and uses `info!()`, `warn!()`, `debug!()`, `trace!()`,
+`error!()` macros directly — no `mkxp-log` dependency needed.  Only the
+binary entry point links `mkxp-log` and calls `mkxp_log::init()` once.
+
+### Logging conventions — FOLLOW THESE
+
+These rules apply to every new line of logging you add:
+
+1. **`?` never logs.**  Error propagation via `?` is silent.  The
+   `thiserror` `Display` impl on the error value already carries the full
+   diagnostic context.
+
+2. **`warn!` only at degradation points.**  When the system catches an
+   error and chooses a fallback (e.g. missing SoundFont → embedded
+   default, case-mismatch path → corrected), log `warn!` because the
+   error was swallowed and callers won't see it.
+
+3. **`error!` only at unrecoverable points.**  Subsystem init failure,
+   device loss, stream errors — things that mean the process is about to
+   exit or a feature is permanently unavailable.
+
+4. **`info!` for lifecycle milestones.**  Manager init, BGM play/stop,
+   config source loaded, renderer ready, audio reset.  Default level
+   (`info`) should produce no more than 1–2 lines per game frame.
+
+5. **`debug!` for developer diagnostics.**  Fade parameters, volume
+   changes, cache hits/misses, state-machine transitions.  Hidden in
+   production, visible with `RUST_LOG=debug` or `debug.mode=true`.
+
+6. **`trace!` for extreme detail.**  Per-track volume computation,
+   per-tick MIDI rendering.  Only enabled when chasing a specific bug.
+   Do NOT put `trace!` on hot paths that run hundreds of times per
+   frame — even filtered-out macros have a small cost.
+
+7. **`#[instrument]` on public API boundaries.**  Annotate functions
+   that are called from Ruby bindings or cross-crate boundaries.  The
+   attribute auto-creates a named span so all downstream logs appear
+   nested.  Use `skip(self)` to avoid dumping large structs, and
+   `fields(...)` for the 1–2 most diagnostic parameters.
+
+8. **Never `println!` / `eprintln!`.**  These cannot be filtered,
+   redirected, or silenced.  Use the tracing macros even in test
+   binaries.
+
+### Filter precedence
+```
+RUST_LOG env var  (highest)
+    ↓
+LogConfig::target_filters
+    ↓
+LogConfig::default_level
+    ↓
+debug.mode shortcut (false → Info, true → Debug)
+    ↓
+debug.log_level string (overrides everything above)
+```
+
+### Config mapping
+```rust
+// From Cargo.toml
+mkxp-config = { path = "../mkxp-config" }
+
+// In binary main():
+let log_cfg = LogConfig::from(&config);
+mkxp_log::init(log_cfg)?;
+```
+
+### Time crate
+`time = "0.3"` with features `["formatting", "local-offset"]` is a
+direct dependency of `mkxp-log`.  Timestamps use local timezone offset:
+`[2026-06-02T22:48:26.584+08:00:00]`.
+
+### Key files
+
+| File | Why |
+|------|-----|
+| `crates/mkxp-log/src/lib.rs` | LogConfig, LogLevel, init(), From<&Config>, parse_log_level |
+| `crates/mkxp-log/src/layer.rs` | MkxpLayer — on_event, on_new_span, on_close, Composite flattening |
+| `crates/mkxp-log/src/error.rs` | LogError — AlreadySet, CreateDir, OpenFile, Mkxp |
+| `docs/LOGGING.md` | Full design doc + Phase 1/2 records |
 
 ## Key files to read
 

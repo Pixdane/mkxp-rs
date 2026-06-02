@@ -54,6 +54,7 @@ impl FileSystem {
     ///
     /// Sources mounted later shadow earlier ones for overlapping paths.
     pub fn mount(&mut self, source: Box<dyn Mountable>, mountpoint: &VPath) {
+        tracing::info!(mountpoint = %mountpoint.as_str(), "mounted source");
         self.mounts.push((mountpoint.clone(), source));
     }
 
@@ -130,7 +131,10 @@ impl FileSystem {
     ///
     /// This should be called once after all sources have been mounted.
     pub fn build_path_cache(&mut self) -> Result<(), FsError> {
-        self.path_cache = Some(PathCache::build(&self.mounts)?);
+        let cache = PathCache::build(&self.mounts)?;
+        let entry_count = cache.len();
+        self.path_cache = Some(cache);
+        tracing::info!(entries = entry_count, "built path cache");
         Ok(())
     }
 
@@ -148,8 +152,14 @@ impl FileSystem {
     fn resolve_path(&self, path: &str) -> Result<VPath, FsError> {
         if let Some(ref cache) = self.path_cache {
             let lower = path.to_lowercase();
-            let real = cache.resolve(&lower).unwrap_or(path);
-            VPath::new(real)
+            if let Some(real) = cache.resolve(&lower) {
+                if real != path {
+                    tracing::warn!(requested = %path, actual = %real, "case mismatch in path");
+                }
+                VPath::new(real)
+            } else {
+                VPath::new(path)
+            }
         } else {
             VPath::new(path)
         }

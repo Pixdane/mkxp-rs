@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/mkxp-types", "crates/mkxp-config", "crates/mkxp-fs", "crates/mkxp-audio"]
+members = ["crates/mkxp-types", "crates/mkxp-config", "crates/mkxp-fs", "crates/mkxp-audio", "crates/mkxp-log"]
 resolver = "2"
 
 [workspace.package]

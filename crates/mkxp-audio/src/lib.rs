@@ -15,6 +15,23 @@
 //! # }
 //! ```
 //!
+//! # Logging
+//!
+//! When the `tracing` subscriber is active, the audio crate emits structured
+//! events across five verbosity levels:
+//!
+//! | Level | Examples |
+//! |-------|----------|
+//! | `error` | kira device creation failure, cpal MIDI stream errors |
+//! | `warn` | SoundFont missing (fallback to embedded), audio decode failures |
+//! | `info` | `AudioManager` init, BGM/BGS/ME play/stop, MIDI engine setup, audio reset |
+//! | `debug` | BGM/BGS/ME fade, SE play/stop, per-track volume changes, midi stream life, SE cache miss/eviction |
+//! | `trace` | Per-track effective BGM volume computation (`base × ratio × external`) |
+//!
+//! Four public entry points are annotated with `#[instrument]`, creating
+//! named spans that nest all downstream events: `bgm_play`, `bgs_play`,
+//! `me_play`, `se_play`.
+//!
 //! # Channels
 //!
 //! | Channel | Role | Loops | Backing |

@@ -5,6 +5,8 @@ use kira::track::{TrackBuilder, TrackHandle};
 use kira::tween::Tween;
 use std::io::Cursor;
 
+use tracing::{info, warn, debug, trace, error, instrument};
+
 use crate::midi::MidiEngine;
 use crate::midi_stream::MidiStream;
 use crate::se_cache::SeCache;
@@ -74,7 +76,10 @@ impl AudioManager {
     /// ```
     pub fn new(bgm_track_count: usize, _se_source_count: usize) -> AudioResult<Self> {
         let mut kira = KiraManager::new(AudioManagerSettings::default())
-            .map_err(|e| crate::AudioError::device(format!("{}", e)))?;
+            .map_err(|e| {
+                error!(error = %e, "failed to create kira audio manager");
+                crate::AudioError::device(format!("{}", e))
+            })?;
 
         let count = bgm_track_count.max(1);
         let mut bgm_tracks = Vec::with_capacity(count);
@@ -87,6 +92,8 @@ impl AudioManager {
             bgm_tracks.push(track);
             bgm_handles.push(None);
         }
+
+        info!(bgm_tracks = count, "audio manager initialised");
 
         Ok(Self {
             kira,
@@ -119,6 +126,11 @@ impl AudioManager {
     /// ```
     pub fn setup_midi(&mut self, soundfont_path: &str) -> AudioResult<()> {
         let engine = MidiEngine::new(soundfont_path)?;
+        if soundfont_path.is_empty() {
+            warn!("no SoundFont specified, using embedded silent fallback");
+        } else {
+            info!(path = %soundfont_path, "MIDI engine ready");
+        }
         self.midi = Some(engine);
         Ok(())
     }
@@ -132,7 +144,10 @@ impl AudioManager {
             ));
         }
         StaticSoundData::from_cursor(Cursor::new(source.data.clone()))
-            .map_err(|e| crate::AudioError::device(format!("decode: {}", e)))
+            .map_err(|e| {
+                warn!(path = %source.path(), error = %e, "audio decode failed, skipping");
+                crate::AudioError::device(format!("decode: {}", e))
+            })
     }
 
     fn bgs_track_mut(&mut self) -> AudioResult<&mut TrackHandle> {
@@ -185,6 +200,7 @@ impl AudioManager {
             if let Some(handle) = handle_opt {
                 let base = self.bgm_base_volumes.get(i).copied().unwrap_or(1.0);
                 let effective = base * self.bgm_ratio * self.bgm_external;
+                trace!(track = i, base, ratio = self.bgm_ratio, external = self.bgm_external, effective, "BGM volume applied");
                 handle.set_volume(effective, Tween::default());
             }
         }
@@ -210,6 +226,7 @@ impl AudioManager {
     fn tick_me_watch(&mut self) {
         if let Some(ref h) = self.me_handle {
             if matches!(h.state(), kira::sound::PlaybackState::Stopped) {
+                debug!("ME finished, restoring BGM");
                 self.restore_bgm_after_me();
             }
         }
@@ -224,6 +241,7 @@ impl AudioManager {
     /// * `track >= 0`: plays on the specified track index.
     ///
     /// MIDI files are detected automatically and streamed in real-time.
+    #[instrument(skip(self, source), fields(path = %source.path(), volume, pitch, track))]
     pub fn bgm_play(
         &mut self,
         source: &AudioSource,
@@ -232,6 +250,7 @@ impl AudioManager {
         pos: f64,
         track: i32,
     ) -> AudioResult<()> {
+        info!("BGM play");
         if track == -127 {
             // Stop all tracks except 0, then play on track 0
             for i in 1..self.bgm_handles.len() {
@@ -300,6 +319,7 @@ impl AudioManager {
     /// * `track = -127`: stops all tracks.
     /// * `track >= 0`: stops the specified track.
     pub fn bgm_stop(&mut self, track: i32) {
+        info!(track, "BGM stop");
         match Self::resolve_track(track, self.bgm_handles.len()) {
             None => {
                 for h in self.bgm_handles.iter_mut() {
@@ -324,6 +344,7 @@ impl AudioManager {
     /// * `track = -127`: fades all tracks.
     /// * `track >= 0`: fades the specified track.
     pub fn bgm_fade(&mut self, time_ms: i32, track: i32) {
+        debug!(time_ms, track, "BGM fade");
         let tween = Tween {
             duration: std::time::Duration::from_millis(time_ms as u64),
             ..Default::default()
@@ -352,6 +373,7 @@ impl AudioManager {
     ///
     /// Effective volume = `base[track] * ratio`.
     pub fn bgm_setvolume(&mut self, volume: i32, track: i32) {
+        debug!(volume, track, "BGM setvolume");
         let vol = Volume::new(volume).as_f64();
         match Self::resolve_track(track, self.bgm_handles.len()) {
             None => { self.bgm_ratio = vol; }
@@ -385,6 +407,7 @@ impl AudioManager {
 
     // ── BGS ─────────────────────────────────────────────────────────────
 
+    #[instrument(skip(self, source), fields(path = %source.path(), volume))]
     pub fn bgs_play(
         &mut self,
         source: &AudioSource,
@@ -392,6 +415,7 @@ impl AudioManager {
         pitch: i32,
         pos: f64,
     ) -> AudioResult<()> {
+        info!("BGS play");
         if let Some(mut h) = self.bgs_handle.take() {
             h.stop(Tween::default());
         }
@@ -413,12 +437,14 @@ impl AudioManager {
     }
 
     pub fn bgs_stop(&mut self) {
+        info!("BGS stop");
         if let Some(mut h) = self.bgs_handle.take() {
             h.stop(Tween::default());
         }
     }
 
     pub fn bgs_fade(&mut self, time_ms: i32) {
+        debug!(time_ms, "BGS fade");
         if let Some(ref mut h) = self.bgs_handle {
             h.stop(Tween {
                 duration: std::time::Duration::from_millis(time_ms as u64),
@@ -433,12 +459,14 @@ impl AudioManager {
 
     // ── ME ──────────────────────────────────────────────────────────────
 
+    #[instrument(skip(self, source), fields(path = %source.path(), volume))]
     pub fn me_play(
         &mut self,
         source: &AudioSource,
         volume: i32,
         pitch: i32,
     ) -> AudioResult<()> {
+        info!("ME play");
         if let Some(mut h) = self.me_handle.take() {
             h.stop(Tween::default());
         }
@@ -458,6 +486,7 @@ impl AudioManager {
     }
 
     pub fn me_stop(&mut self) {
+        info!("ME stop");
         if let Some(mut h) = self.me_handle.take() {
             h.stop(Tween::default());
         }
@@ -465,6 +494,7 @@ impl AudioManager {
     }
 
     pub fn me_fade(&mut self, time_ms: i32) {
+        debug!(time_ms, "ME fade");
         if let Some(ref mut h) = self.me_handle {
             h.stop(Tween {
                 duration: std::time::Duration::from_millis(time_ms as u64),
@@ -475,12 +505,14 @@ impl AudioManager {
 
     // ── SE ──────────────────────────────────────────────────────────────
 
+    #[instrument(skip(self, source), fields(path = %source.path()))]
     pub fn se_play(
         &mut self,
         source: &AudioSource,
         volume: i32,
         pitch: i32,
     ) -> AudioResult<()> {
+        debug!("SE play");
         if self.se_cache.get(source.path()).is_none() {
             self.se_cache.insert(source.path(), source.data.clone());
         }
@@ -498,6 +530,7 @@ impl AudioManager {
     }
 
     pub fn se_stop(&mut self) {
+        debug!("SE stop");
         for mut h in self.se_handles.drain(..) {
             h.stop(Tween::default());
         }
@@ -506,6 +539,7 @@ impl AudioManager {
     // ── Reset ───────────────────────────────────────────────────────────
 
     pub fn reset(&mut self) {
+        info!("audio reset");
         if let Some(stream) = self.midi_stream.take() {
             stream.stop();
         }

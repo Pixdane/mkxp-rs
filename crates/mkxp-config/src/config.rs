@@ -152,4 +152,7 @@ pub struct Debug {
     pub mode: Option<bool>,
     pub console: Option<bool>,
     pub show_fps: Option<String>,
+    /// Log level override: `"error"`, `"warn"`, `"info"`, `"debug"`, or `"trace"`.
+    /// When set, takes precedence over the `mode` flag for log verbosity.
+    pub log_level: Option<String>,
 }

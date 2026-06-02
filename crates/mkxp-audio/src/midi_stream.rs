@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
+use tracing::{debug, error};
+
 use crate::midi::MidiEngine;
 use crate::AudioResult;
 
@@ -57,6 +59,7 @@ impl MidiStream {
         engine: &MidiEngine,
         do_loop: bool,
     ) -> AudioResult<Self> {
+        debug!(len = midi_bytes.len(), do_loop, "MIDI stream starting");
         let sample_rate = engine.sample_rate() as u32;
         let block = engine.block_size();
         let synth = engine.create_synthesizer()?;
@@ -152,7 +155,7 @@ impl MidiStream {
                         }
                     }
                 },
-                |err| eprintln!("cpal MIDI stream error: {}", err),
+                |err| error!(error = %err, "cpal MIDI stream error"),
                 None,
             )
             .map_err(|e| crate::AudioError::device(format!("cpal stream: {}", e)))?;
@@ -170,6 +173,7 @@ impl MidiStream {
 
     /// Stop playback and tear down the render thread.
     pub fn stop(self) {
+        debug!("MIDI stream stopped");
         self.stop_flag.store(true, Ordering::Relaxed);
         // Joining is handled by Drop — the render thread exits on stop_flag.
         // cpal stream stops on Drop.

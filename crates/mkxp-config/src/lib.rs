@@ -16,6 +16,20 @@
 //! ```rust,no_run
 //! let cfg = mkxp_config::load(std::env::args().collect()).unwrap();
 //! ```
+//!
+//! # Logging
+//!
+//! When the `tracing` subscriber is active (`mkxp_log::init()`), `load()`
+//! emits the following structured events:
+//!
+//! | Event | Level | Content |
+//! |-------|-------|---------|
+//! | CLI args parsed | `debug` | `rgss_version`, `window.size`, `debug.mode`, `debug.log_level` |
+//! | Env vars detected | `info` | when any `MKXP_*` variable is set |
+//! | User config loaded | `info` | `path` to the user's `mkxp.ron` |
+//! | Game config loaded | `info` | `"loaded game config from mkxp.ron"` |
+//! | Game.ini loaded | `info` | `title` and `scripts` from `[Game]` section |
+//! | Configuration done | `info` | final `rgss_version` |
 
 pub mod config;
 mod command_line;
@@ -50,6 +64,9 @@ pub enum SourceError {
 pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
     // Start with CLI config (highest priority — merged first wins).
     let mut cfg = command_line::parse(&cli_args).map_err(SourceError::Cli)?;
+    tracing::debug!(?cfg.ruby.rgss_version, ?cfg.window.size, ?cfg.window.fullscreen,
+        ?cfg.debug.mode, ?cfg.debug.log_level,
+        "CLI args parsed");
 
     // --- 2. Environment variables ---
     if let Ok(env_builder) = ::config::Config::builder()
@@ -57,7 +74,13 @@ pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
         .build()
     {
         if let Ok(env_cfg) = env_builder.try_deserialize::<Config>() {
+            let had_env = env_cfg.window.title.is_some()
+                || env_cfg.debug.mode.is_some()
+                || env_cfg.debug.log_level.is_some();
             cfg.merge(env_cfg);
+            if had_env {
+                tracing::info!("loaded env config (MKXP_* variables)");
+            }
         }
     }
 
@@ -69,6 +92,7 @@ pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
         {
             if let Ok(user_cfg) = user_builder.try_deserialize::<Config>() {
                 cfg.merge(user_cfg);
+                tracing::info!(path = %user_path, "loaded user config");
             }
         }
     }
@@ -80,6 +104,7 @@ pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
     {
         if let Ok(ron_cfg) = ron_builder.try_deserialize::<Config>() {
             cfg.merge(ron_cfg);
+            tracing::info!("loaded game config from mkxp.ron");
         }
     }
 
@@ -90,9 +115,15 @@ pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
     {
         if let Ok(ini_cfg) = ini_builder.try_deserialize::<IniHelper>() {
             apply_ini_to_config(&mut cfg, &ini_cfg);
+            if let (Some(title), Some(scripts)) = (&ini_cfg.game.title, &ini_cfg.game.scripts) {
+                tracing::info!(title, scripts, "loaded Game.ini");
+            } else {
+                tracing::info!("loaded Game.ini");
+            }
         }
     }
 
+    tracing::info!(rgss_version = ?cfg.ruby.rgss_version, "configuration loaded");
     Ok(cfg)
 }
 
@@ -118,12 +149,12 @@ struct IniGame {
 /// Apply Game.ini values to a Config. Only `window.title` and
 /// `ruby.scripts_path` are set; all other fields are left alone.
 fn apply_ini_to_config(cfg: &mut Config, ini: &IniHelper) {
-    if let Some(ref title) = ini.game.title {
+    if let Some(title) = &ini.game.title {
         if !title.is_empty() {
             cfg.window.title = Some(title.clone());
         }
     }
-    if let Some(ref scripts) = ini.game.scripts {
+    if let Some(scripts) = &ini.game.scripts {
         cfg.ruby.scripts_path = Some(scripts.clone());
     }
 }

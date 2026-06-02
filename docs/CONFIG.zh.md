@@ -128,6 +128,9 @@ MKXP_* 环境变量              最高优先级
 | `mode` | `bool` | `false` | 是否启用调试日志，将引擎内部信息打印到标准输出。 |
 | `console` | `bool` | `false` | 是否弹出独立控制台窗口用于日志输出（仅 Windows）。 |
 | `show_fps` | FpsDisplay | `"none"` | 帧率显示位置，可选 `"none"` `"titlebar"` `"console"` `"both"`。 |
+| `log_level` | LogLevel | `None` | 覆盖日志详细级别：`"error"`、`"warn"`、`"info"`、`"debug"`、`"trace"`。设置后优先级高于 `mode` 字段。`None` 表示使用 `mode` 作为快捷开关（`false` = info，`true` = debug）。 |
+
+**日志级别优先级**：`log_level` 提供细粒度控制，独立于 `mode` 开关。当 `log_level` 有值时（如 `"trace"`），它始终生效。当 `log_level` 为 `None` 时，`mode` 作为快捷开关：`false` → `info`，`true` → `debug`。此设计在保持向后兼容的同时，允许 CI / 开发环境单独调整日志输出级别。
 
 ---
 
@@ -178,6 +181,7 @@ mkxp-z 仅定义了 3 个环境变量：`MKXPZ_WINDOWS_CONSOLE`（启用控制�
 | `MKXP_DEBUG__MODE` | `debug.mode` |
 | `MKXP_DEBUG__CONSOLE` | `debug.console` |
 | `MKXP_DEBUG__SHOW_FPS` | `debug.show_fps` |
+| `MKXP_DEBUG__LOG_LEVEL` | `debug.log_level` |
 
 ---
 
@@ -209,6 +213,7 @@ mkxp-z 只识别三个参数：`debug`、`test` 和 `btest`（源码 `config.cpp
 | `--debug` | `debug.mode`（flag） |
 | `--console` | `debug.console`（flag） |
 | `--show-fps` | `debug.show_fps` |
+| `--log-level <level>` | `debug.log_level` |
 
 示例：
 

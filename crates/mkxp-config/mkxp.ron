@@ -145,11 +145,10 @@
         se_volume: 1.0,
         bgs_volume: 1.0,
         me_volume: 1.0,
-        # MIDI synthesiser backend: "" (system default) | "fluidsynth" | "timidity"
-        midi_synth: "",
-        # FluidSynth SoundFont path (only used when midi_synth = "fluidsynth")
-        soundfont: None,
-        # MIDI chorus / reverb effects (FluidSynth only)
+        # SoundFont path for MIDI playback (rustysynth).
+        # When empty, MIDI plays silently without crashing.
+        midi_soundfont: None,
+        # MIDI chorus / reverb effects
         midi_chorus: false,
         midi_reverb: false,
         # Maximum simultaneous SE sources (max 64)
@@ -165,5 +164,8 @@
         console: false,
         # FPS display mode: "none" | "titlebar" | "console" | "both"
         show_fps: "none",
+        # Log verbosity override: "error" | "warn" | "info" | "debug" | "trace".
+        # When set, takes precedence over `mode`.  None = use `mode` as shortcut.
+        log_level: None,
     ),
 )

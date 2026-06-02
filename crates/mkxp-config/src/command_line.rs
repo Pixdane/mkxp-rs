@@ -77,6 +77,11 @@ struct Cli {
     #[arg(long)]
     midi_soundfont: Option<String>,
 
+    /// Log level (error / warn / info / debug / trace).
+    /// Overrides the --debug flag for log verbosity.
+    #[arg(long)]
+    log_level: Option<String>,
+
     /// Enable debug output
     #[arg(long)]
     debug: bool,
@@ -133,6 +138,7 @@ impl From<Cli> for Config {
                 mode: if cli.debug { Some(true) } else { None },
                 console: if cli.console { Some(true) } else { None },
                 show_fps: cli.show_fps,
+                log_level: cli.log_level,
             },
             ..Default::default()
         }
@@ -180,7 +186,7 @@ mod tests {
             frame_rate: None, font_scale: None, font_hinting: None,
             no_kerning: false, no_outline_crop: false, master_volume: None,
             bgm_volume: None, se_volume: None,
-            midi_soundfont: None, debug: false, console: false, show_fps: None,
+            midi_soundfont: None, log_level: None, debug: false, console: false, show_fps: None,
         });
         assert!(cfg.ruby.rgss_version.is_none());
         assert!(cfg.window.size.is_none());
