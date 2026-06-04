@@ -233,12 +233,11 @@ impl AudioManager {
     /// Check if ME has finished and restore BGM if needed.
     /// Called before any BGM-affecting operation.
     fn tick_me_watch(&mut self) {
-        if let Some(ref h) = self.me_handle {
-            if matches!(h.state(), kira::sound::PlaybackState::Stopped) {
+        if let Some(ref h) = self.me_handle
+            && matches!(h.state(), kira::sound::PlaybackState::Stopped) {
                 debug!("ME finished, restoring BGM");
                 self.restore_bgm_after_me();
             }
-        }
     }
 
     // ── BGM ─────────────────────────────────────────────────────────────
@@ -357,10 +356,8 @@ impl AudioManager {
         };
         match Self::resolve_track(track, self.bgm_handles.len()) {
             None => {
-                for h in self.bgm_handles.iter_mut() {
-                    if let Some(handle) = h {
-                        handle.stop(tween);
-                    }
+                for handle in self.bgm_handles.iter_mut().flatten() {
+                    handle.stop(tween);
                 }
             }
             Some(idx) => {

@@ -72,8 +72,7 @@ pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
     if let Ok(env_builder) = ::config::Config::builder()
         .add_source(::config::Environment::with_prefix("MKXP").separator("__"))
         .build()
-    {
-        if let Ok(env_cfg) = env_builder.try_deserialize::<Config>() {
+        && let Ok(env_cfg) = env_builder.try_deserialize::<Config>() {
             let had_env = env_cfg.window.title.is_some()
                 || env_cfg.debug.mode.is_some()
                 || env_cfg.debug.log_level.is_some();
@@ -82,38 +81,31 @@ pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
                 tracing::info!("loaded env config (MKXP_* variables)");
             }
         }
-    }
 
     // --- 3. User config ---
-    if let Some(user_path) = user_config_path() {
-        if let Ok(user_builder) = ::config::Config::builder()
+    if let Some(user_path) = user_config_path()
+        && let Ok(user_builder) = ::config::Config::builder()
             .add_source(::config::File::with_name(&user_path).required(false))
             .build()
-        {
-            if let Ok(user_cfg) = user_builder.try_deserialize::<Config>() {
+            && let Ok(user_cfg) = user_builder.try_deserialize::<Config>() {
                 cfg.merge(user_cfg);
                 tracing::info!(path = %user_path, "loaded user config");
             }
-        }
-    }
 
     // --- 4. Game directory mkxp.ron ---
     if let Ok(ron_builder) = ::config::Config::builder()
         .add_source(::config::File::with_name("mkxp").required(false))
         .build()
-    {
-        if let Ok(ron_cfg) = ron_builder.try_deserialize::<Config>() {
+        && let Ok(ron_cfg) = ron_builder.try_deserialize::<Config>() {
             cfg.merge(ron_cfg);
             tracing::info!("loaded game config from mkxp.ron");
         }
-    }
 
     // --- 5. Game.ini (lowest priority — fills remaining gaps) ---
     if let Ok(ini_builder) = ::config::Config::builder()
         .add_source(::config::File::with_name("Game").required(false))
         .build()
-    {
-        if let Ok(ini_cfg) = ini_builder.try_deserialize::<IniHelper>() {
+        && let Ok(ini_cfg) = ini_builder.try_deserialize::<IniHelper>() {
             apply_ini_to_config(&mut cfg, &ini_cfg);
             if let (Some(title), Some(scripts)) = (&ini_cfg.game.title, &ini_cfg.game.scripts) {
                 tracing::info!(title, scripts, "loaded Game.ini");
@@ -121,7 +113,6 @@ pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
                 tracing::info!("loaded Game.ini");
             }
         }
-    }
 
     tracing::info!(rgss_version = ?cfg.ruby.rgss_version, "configuration loaded");
     Ok(cfg)
@@ -149,11 +140,10 @@ struct IniGame {
 /// Apply Game.ini values to a Config. Only `window.title` and
 /// `ruby.scripts_path` are set; all other fields are left alone.
 fn apply_ini_to_config(cfg: &mut Config, ini: &IniHelper) {
-    if let Some(title) = &ini.game.title {
-        if !title.is_empty() {
+    if let Some(title) = &ini.game.title
+        && !title.is_empty() {
             cfg.window.title = Some(title.clone());
         }
-    }
     if let Some(scripts) = &ini.game.scripts {
         cfg.ruby.scripts_path = Some(scripts.clone());
     }

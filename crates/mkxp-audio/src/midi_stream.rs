@@ -41,7 +41,6 @@ use crate::AudioResult;
 /// # Ok(())
 /// # }
 /// ```
-
 pub struct MidiStream {
     _render_thread: JoinHandle<()>,
     stop_flag: Arc<AtomicBool>,
@@ -108,8 +107,8 @@ impl MidiStream {
                     }
                 }
 
-                if seq.end_of_sequence() {
-                    if !do_loop {
+                if seq.end_of_sequence()
+                    && !do_loop {
                         // Drain remaining audio, then stop
                         for _ in 0..50 {
                             seq.render(&mut left, &mut right);
@@ -120,7 +119,6 @@ impl MidiStream {
                         }
                         break;
                     }
-                }
             }
         });
 

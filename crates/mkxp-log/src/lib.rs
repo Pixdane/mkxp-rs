@@ -301,14 +301,13 @@ impl From<&mkxp_config::Config> for LogConfig {
     /// ```
     fn from(config: &mkxp_config::Config) -> Self {
         // log_level string takes highest priority
-        if let Some(ref level_str) = config.debug.log_level {
-            if let Some(level) = parse_log_level(level_str) {
+        if let Some(ref level_str) = config.debug.log_level
+            && let Some(level) = parse_log_level(level_str) {
                 return LogConfig {
                     default_level: level,
                     ..Default::default()
                 };
             }
-        }
 
         // Fall back to debug.mode
         config_from_debug_mode(config.debug.mode.unwrap_or(false))

@@ -72,15 +72,14 @@ impl SeCache {
 
         // Evict LRU entries if needed
         while self.current_bytes + data_len > self.max_bytes && !self.order.is_empty() {
-            if let Some(evict_path) = self.order.pop_back() {
-                if let Some(evicted) = self.entries.remove(&evict_path) {
+            if let Some(evict_path) = self.order.pop_back()
+                && let Some(evicted) = self.entries.remove(&evict_path) {
                     self.current_bytes = self.current_bytes.saturating_sub(evicted.len());
                     debug!(path = %evict_path, evicted_bytes = evicted.len(),
                         current_mb = self.current_bytes as f64 / 1_048_576.0,
                         max_mb = self.max_bytes as f64 / 1_048_576.0,
                         "SE cache eviction");
                 }
-            }
         }
 
         self.current_bytes += data_len;
