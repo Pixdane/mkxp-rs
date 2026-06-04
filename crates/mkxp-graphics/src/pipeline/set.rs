@@ -4,6 +4,12 @@
 /// 当前为空骨架。
 pub struct PipelineSet;
 
+impl Default for PipelineSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PipelineSet {
     pub fn new() -> Self {
         Self

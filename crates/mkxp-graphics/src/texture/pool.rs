@@ -4,6 +4,12 @@
 /// 当前为空骨架。
 pub struct TexPool;
 
+impl Default for TexPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TexPool {
     pub fn new() -> Self {
         Self

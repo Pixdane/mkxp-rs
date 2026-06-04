@@ -4,6 +4,12 @@
 /// 当前为空骨架。
 pub struct PostProcess;
 
+impl Default for PostProcess {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PostProcess {
     pub fn new() -> Self {
         Self

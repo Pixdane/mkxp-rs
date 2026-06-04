@@ -124,10 +124,9 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(ref graphics) = self.graphics {
-            if let Err(e) = graphics.lock().unwrap().update() {
+        if let Some(ref graphics) = self.graphics
+            && let Err(e) = graphics.lock().unwrap().update() {
                 eprintln!("graphics update error: {e:?}");
             }
-        }
     }
 }

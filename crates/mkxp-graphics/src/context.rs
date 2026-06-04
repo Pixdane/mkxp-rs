@@ -11,6 +11,12 @@ pub struct BlendStack {
     stack: Vec<BlendMode>,
 }
 
+impl Default for BlendStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BlendStack {
     pub fn new() -> Self {
         Self {
@@ -32,6 +38,12 @@ impl BlendStack {
 /// 裁剪区域栈。
 pub struct ScissorStack {
     stack: Vec<Option<(u32, u32, u32, u32)>>,
+}
+
+impl Default for ScissorStack {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScissorStack {
@@ -73,6 +85,12 @@ pub struct DrawContext<'a> {
     pub blend: BlendStack,
     pub scissor: ScissorStack,
     _phantom: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> Default for DrawContext<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a> DrawContext<'a> {
