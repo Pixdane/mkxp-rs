@@ -1,0 +1,15 @@
+[package]
+name = "mkxp-graphics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mkxp-types = { path = "../mkxp-types" }
+mkxp-fs = { path = "../mkxp-fs" }
+wgpu = "24"
+image = "0.25"
+slotmap = "1"
+thiserror = "2"
+bytemuck = { version = "1", features = ["derive"] }
+tracing = "0.1"

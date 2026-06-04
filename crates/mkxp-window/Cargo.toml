@@ -1,0 +1,16 @@
+[package]
+name = "mkxp-window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mkxp-window"
+path = "src/main.rs"
+
+[dependencies]
+mkxp-graphics = { path = "../mkxp-graphics" }
+winit = "0.30"
+wgpu = "24"
+pollster = "0.4"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
