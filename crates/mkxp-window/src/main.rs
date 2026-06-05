@@ -238,14 +238,17 @@ impl App {
 
     fn handle_resize(&mut self, w: u32, h: u32) {
         if self.self_applied {
-            // 我们自己的 resize_to_fit 触发的，不清锁
             self.self_applied = false;
         } else if self.scale_locked || self.aspect_locked {
-            // 用户手动拖窗口 → 解锁所有约束
-            self.scale_locked = false;
-            self.aspect_locked = false;
-            self.clear_scale_marks();
-            self.sync_lock_marks();
+            // 锁活跃 → 约束拖拽，不放弃锁
+            let c = self.constrain_size(w, h);
+            if c != (w, h) {
+                self.self_applied = true;
+                if let Some(ref window) = self.window {
+                    let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
+                }
+                return;
+            }
         }
         if let Some(ref graphics) = self.graphics {
             graphics.lock().unwrap().on_resize(w, h);
