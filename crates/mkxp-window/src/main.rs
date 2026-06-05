@@ -9,7 +9,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
 use mkxp_graphics::GraphicsState;
 
@@ -34,6 +34,14 @@ struct App {
     scale_factor: u32,
     aspect_locked: bool,
     resizing: bool,
+
+    /// 菜单项引用（用于更新 checkmark 状态）。
+    mi_scale_1x: Option<CheckMenuItem>,
+    mi_scale_2x: Option<CheckMenuItem>,
+    mi_scale_3x: Option<CheckMenuItem>,
+    mi_scale_4x: Option<CheckMenuItem>,
+    mi_lock_aspect: Option<CheckMenuItem>,
+    mi_lock_scale: Option<CheckMenuItem>,
 }
 
 impl Default for App {
@@ -47,6 +55,12 @@ impl Default for App {
             scale_factor: 1,
             aspect_locked: false,
             resizing: false,
+            mi_scale_1x: None,
+            mi_scale_2x: None,
+            mi_scale_3x: None,
+            mi_scale_4x: None,
+            mi_lock_aspect: None,
+            mi_lock_scale: None,
         }
     }
 }
@@ -73,7 +87,7 @@ impl ApplicationHandler for App {
             .expect("failed to create window");
 
         // ── 菜单栏 ──
-        let (menu, menu_receiver) = Self::build_menu().expect("failed to create menu");
+        let (menu, menu_receiver, items) = Self::build_menu().expect("failed to create menu");
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -149,6 +163,12 @@ impl ApplicationHandler for App {
         self.scale_factor = 1;
         self._menu = Some(menu);
         self.menu_receiver = Some(menu_receiver);
+        self.mi_scale_1x = Some(items.scale_1x);
+        self.mi_scale_2x = Some(items.scale_2x);
+        self.mi_scale_3x = Some(items.scale_3x);
+        self.mi_scale_4x = Some(items.scale_4x);
+        self.mi_lock_aspect = Some(items.lock_aspect);
+        self.mi_lock_scale = Some(items.lock_scale);
         self.graphics = Some(graphics);
         self.window = Some(window);
     }
@@ -181,6 +201,13 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // 手动缩放（非菜单触发）时清除 fixed scale 选中
+                if constrained == (w, h) && (self.scale_locked || self.aspect_locked) {
+                    // lock 模式下的缩放，不清 checkmark
+                } else if constrained == (w, h) {
+                    self.clear_scale_checkmark();
+                }
+
                 if let Some(ref graphics) = self.graphics {
                     graphics
                         .lock()
@@ -201,11 +228,15 @@ impl ApplicationHandler for App {
                 KeyCode::KeyA => {
                     self.aspect_locked = !self.aspect_locked;
                     self.scale_locked = false;
+                    self.update_lock_checkmarks();
+                    self.clear_scale_checkmark();
                     self.reapply_constraints();
                 }
                 KeyCode::KeyS => {
                     self.scale_locked = !self.scale_locked;
                     self.aspect_locked = false;
+                    self.update_lock_checkmarks();
+                    self.clear_scale_checkmark();
                     self.reapply_constraints();
                 }
                 KeyCode::Equal | KeyCode::NumpadAdd => {
@@ -213,6 +244,7 @@ impl ApplicationHandler for App {
                         self.scale_factor += 1;
                     }
                     if self.scale_locked {
+                        self.update_scale_checkmark(self.scale_factor);
                         self.reapply_constraints();
                     }
                 }
@@ -221,6 +253,7 @@ impl ApplicationHandler for App {
                         self.scale_factor -= 1;
                     }
                     if self.scale_locked {
+                        self.update_scale_checkmark(self.scale_factor);
                         self.reapply_constraints();
                     }
                 }
@@ -228,6 +261,8 @@ impl ApplicationHandler for App {
                     self.aspect_locked = false;
                     self.scale_locked = false;
                     self.scale_factor = 1;
+                    self.update_lock_checkmarks();
+                    self.clear_scale_checkmark();
                     self.reapply_constraints();
                 }
                 _ => {}
@@ -258,18 +293,27 @@ impl ApplicationHandler for App {
     }
 }
 
+struct MenuItems {
+    scale_1x: CheckMenuItem,
+    scale_2x: CheckMenuItem,
+    scale_3x: CheckMenuItem,
+    scale_4x: CheckMenuItem,
+    lock_aspect: CheckMenuItem,
+    lock_scale: CheckMenuItem,
+}
+
 impl App {
-    fn build_menu() -> Result<(Menu, crossbeam_channel::Receiver<MenuEvent>), muda::Error> {
+    fn build_menu() -> Result<(Menu, crossbeam_channel::Receiver<MenuEvent>, MenuItems), muda::Error> {
         let menu = Menu::new();
 
         // ── View ──
         let view_menu = Submenu::new("View", true);
-        let scale_1x = MenuItem::with_id("scale_1x", "1x (640\u{d7}480)", true, None);
-        let scale_2x = MenuItem::with_id("scale_2x", "2x (1280\u{d7}960)", true, None);
-        let scale_3x = MenuItem::with_id("scale_3x", "3x (1920\u{d7}1440)", true, None);
-        let scale_4x = MenuItem::with_id("scale_4x", "4x (2560\u{d7}1920)", true, None);
-        let lock_aspect = MenuItem::with_id("lock_aspect", "Lock Aspect Ratio", true, None);
-        let lock_scale = MenuItem::with_id("lock_scale", "Lock Integer Scale", true, None);
+        let scale_1x = CheckMenuItem::with_id("scale_1x", "1x (640\u{d7}480)", true, false, None);
+        let scale_2x = CheckMenuItem::with_id("scale_2x", "2x (1280\u{d7}960)", true, false, None);
+        let scale_3x = CheckMenuItem::with_id("scale_3x", "3x (1920\u{d7}1440)", true, false, None);
+        let scale_4x = CheckMenuItem::with_id("scale_4x", "4x (2560\u{d7}1920)", true, false, None);
+        let lock_aspect = CheckMenuItem::with_id("lock_aspect", "Lock Aspect Ratio", true, false, None);
+        let lock_scale = CheckMenuItem::with_id("lock_scale", "Lock Integer Scale", true, false, None);
         view_menu.append_items(&[&scale_1x, &scale_2x, &scale_3x, &scale_4x])?;
         view_menu.append(&PredefinedMenuItem::separator())?;
         view_menu.append_items(&[&lock_aspect, &lock_scale])?;
@@ -291,7 +335,16 @@ impl App {
         #[cfg(target_os = "macos")]
         menu.init_for_nsapp();
 
-        Ok((menu, MenuEvent::receiver().clone()))
+        let items = MenuItems {
+            scale_1x: scale_1x.clone(),
+            scale_2x: scale_2x.clone(),
+            scale_3x: scale_3x.clone(),
+            scale_4x: scale_4x.clone(),
+            lock_aspect: lock_aspect.clone(),
+            lock_scale: lock_scale.clone(),
+        };
+
+        Ok((menu, MenuEvent::receiver().clone(), items))
     }
 
     fn poll_menu_events(&mut self, event_loop: &ActiveEventLoop) {
@@ -362,6 +415,31 @@ match event.id.0.as_str() {
             }
         } else {
             (w, h)
+        }
+    }
+
+        fn update_scale_checkmark(&self, n: u32) {
+        self.set_checked(&self.mi_scale_1x, n == 1);
+        self.set_checked(&self.mi_scale_2x, n == 2);
+        self.set_checked(&self.mi_scale_3x, n == 3);
+        self.set_checked(&self.mi_scale_4x, n == 4);
+    }
+
+    fn clear_scale_checkmark(&self) {
+        self.set_checked(&self.mi_scale_1x, false);
+        self.set_checked(&self.mi_scale_2x, false);
+        self.set_checked(&self.mi_scale_3x, false);
+        self.set_checked(&self.mi_scale_4x, false);
+    }
+
+    fn update_lock_checkmarks(&self) {
+        self.set_checked(&self.mi_lock_aspect, self.aspect_locked);
+        self.set_checked(&self.mi_lock_scale, self.scale_locked);
+    }
+
+    fn set_checked(&self, item: &Option<CheckMenuItem>, checked: bool) {
+        if let Some(item) = item {
+            item.set_checked(checked);
         }
     }
 
