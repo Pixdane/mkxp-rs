@@ -41,6 +41,7 @@ struct App {
     scale_factor: u32,
     aspect_locked: bool,
     expected_size: Option<(u32, u32)>,
+    pending_requests: u32,
 
     mi_scale_1x: Option<CheckMenuItem>,
     mi_scale_2x: Option<CheckMenuItem>,
@@ -61,6 +62,7 @@ impl Default for App {
             scale_factor: 1,
             aspect_locked: false,
             expected_size: None,
+            pending_requests: 0,
             mi_scale_1x: None,
             mi_scale_2x: None,
             mi_scale_3x: None,
@@ -237,13 +239,17 @@ impl App {
     // ── resize ──
 
     fn handle_resize(&mut self, w: u32, h: u32) {
-        // 回来的是我们自己请求的尺寸
         if self.expected_size == Some((w, h)) {
             self.expected_size = None;
+            self.pending_requests = self.pending_requests.saturating_sub(1);
+        } else if self.pending_requests > 0 {
+            // 我们自己的 resize 请求还没回来，跳过中间拖拽事件
+            return;
         } else if self.scale_locked || self.aspect_locked {
             let c = self.constrain_size(w, h);
             if c != (w, h) {
                 self.expected_size = Some(c);
+                self.pending_requests += 1;
                 if let Some(ref window) = self.window {
                     let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
                 }
@@ -353,6 +359,7 @@ impl App {
             let c = self.constrain_size(size.width, size.height);
             if c != (size.width, size.height) {
                 self.expected_size = Some(c);
+                self.pending_requests += 1;
                 let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
             } else if let Some(ref graphics) = self.graphics {
                 graphics.lock().unwrap().on_resize(c.0, c.1);
