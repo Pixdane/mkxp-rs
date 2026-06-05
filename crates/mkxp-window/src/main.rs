@@ -268,23 +268,15 @@ impl App {
         let scale_2x = MenuItem::new("2x (1280\u{d7}960)", true, None);
         let scale_3x = MenuItem::new("3x (1920\u{d7}1440)", true, None);
         let scale_4x = MenuItem::new("4x (2560\u{d7}1920)", true, None);
-        let lock_aspect = MenuItem::new(
-            "Lock Aspect Ratio",
-            true,
-            None,
-        );
-        let lock_scale = MenuItem::new(
-            "Lock Integer Scale",
-            true,
-            None,
-        );
+        let lock_aspect = MenuItem::with_id("lock_aspect", "lock_aspect", true, None);
+        let lock_scale = MenuItem::with_id("lock_scale", "lock_scale", true, None);
         view_menu.append_items(&[&scale_1x, &scale_2x, &scale_3x, &scale_4x])?;
         view_menu.append(&PredefinedMenuItem::separator())?;
         view_menu.append_items(&[&lock_aspect, &lock_scale])?;
 
         // ── Help ──
         let help_menu = Submenu::new("Help", true);
-        let about = MenuItem::new("About mkxp-rs", true, None);
+        let about = MenuItem::with_id("about", "About mkxp-rs", true, None);
         help_menu.append(&about)?;
 
         // ── 组装 ──
@@ -309,7 +301,7 @@ impl App {
         };
 
         while let Ok(event) = receiver.try_recv() {
-            match event.id.0.as_str() {
+match event.id.0.as_str() {
                 "1x (640\u{d7}480)" => {
                     self.scale_locked = true;
                     self.aspect_locked = false;
@@ -334,19 +326,19 @@ impl App {
                     self.scale_factor = 4;
                     self.reapply_constraints();
                 }
-                "Lock Aspect Ratio" => {
+                "lock_aspect" => {
                     self.aspect_locked = !self.aspect_locked;
                     self.scale_locked = false;
                     self.reapply_constraints();
                 }
-                "Lock Integer Scale" => {
+                "lock_scale" => {
                     self.scale_locked = !self.scale_locked;
                     self.aspect_locked = false;
                     self.reapply_constraints();
                 }
-                "quit" | "About mkxp-rs" => {
-                    // quit: macOS Cmd+Q
-                    // about: show placeholder
+                "quit" | "about" => {
+                    // quit: Cmd+Q  
+                    // about: placeholder
                     if event.id.0 == "quit" {
                         event_loop.exit();
                     }
