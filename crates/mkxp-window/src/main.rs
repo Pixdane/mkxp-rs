@@ -40,6 +40,7 @@ struct App {
     scale_locked: bool,
     scale_factor: u32,
     aspect_locked: bool,
+    self_applied: bool,
 
     mi_scale_1x: Option<CheckMenuItem>,
     mi_scale_2x: Option<CheckMenuItem>,
@@ -59,6 +60,7 @@ impl Default for App {
             scale_locked: false,
             scale_factor: 1,
             aspect_locked: false,
+            self_applied: false,
             mi_scale_1x: None,
             mi_scale_2x: None,
             mi_scale_3x: None,
@@ -235,17 +237,15 @@ impl App {
     // ── resize ──
 
     fn handle_resize(&mut self, w: u32, h: u32) {
-        let constrained = self.constrain_size(w, h);
-        if constrained != (w, h) {
-            if let Some(ref window) = self.window {
-                let _ = window.request_inner_size(PhysicalSize::new(constrained.0, constrained.1));
-            }
-            // 等 winit 回调修正后的 Resized，不渲染这帧
-            return;
-        }
-        // 自由缩放（无 lock）→ 清除 scale checkmark
-        if !self.scale_locked && !self.aspect_locked {
+        if self.self_applied {
+            // 我们自己的 resize_to_fit 触发的，不清锁
+            self.self_applied = false;
+        } else if self.scale_locked || self.aspect_locked {
+            // 用户手动拖窗口 → 解锁所有约束
+            self.scale_locked = false;
+            self.aspect_locked = false;
             self.clear_scale_marks();
+            self.sync_lock_marks();
         }
         if let Some(ref graphics) = self.graphics {
             graphics.lock().unwrap().on_resize(w, h);
@@ -340,11 +340,12 @@ impl App {
         }
     }
 
-    fn resize_to_fit(&self) {
+    fn resize_to_fit(&mut self) {
         if let Some(ref window) = self.window {
             let size = window.inner_size();
             let c = self.constrain_size(size.width, size.height);
             if c != (size.width, size.height) {
+                self.self_applied = true;
                 let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
             } else if let Some(ref graphics) = self.graphics {
                 graphics.lock().unwrap().on_resize(c.0, c.1);
