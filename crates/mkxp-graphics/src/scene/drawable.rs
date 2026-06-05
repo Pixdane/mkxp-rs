@@ -1,23 +1,25 @@
-/// 子节点绘制策略。
+// Drawable trait + ChildrenMode + Geometry
+// v1 骨架，待实现。
+
+use super::id::NodeId;
+use crate::context::DrawContext;
+
 pub enum ChildrenMode {
-    /// 没有子节点，直接 draw(self)。
     None,
-    /// 先递归绘制子节点，再 draw(self)。
     BeforeSelf,
 }
 
-/// 场景图中可以绘制自己的元素。
-///
-/// 对应 mkxp-z 的 `SceneElement`。
 pub trait Drawable {
-    fn children_mode(&self) -> ChildrenMode {
-        ChildrenMode::None
-    }
+    fn draw(&self, _id: NodeId, _ctx: &mut DrawContext<'_>) {}
+    fn children_mode(&self) -> ChildrenMode { ChildrenMode::None }
 }
 
-/// 父节点几何信息。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Geometry {
-    pub rect: crate::geometry::Rect,
-    pub origin: (f32, f32),
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub origin_x: f32,
+    pub origin_y: f32,
 }

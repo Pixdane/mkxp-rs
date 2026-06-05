@@ -1311,16 +1311,15 @@ Ruby 对象持有 `Arc<SpriteData>`，SceneGraph 持有 `Weak<SpriteData>`。
 
 | 步骤 | 做什么 | 涉及的模块 | 状态 |
 |------|--------|-----------|------|
-| 1. 开窗 | wgpu + winit 初始化，清屏为纯色 | `GraphicsState` + `mkxp-window` | ✅ 已完成 |
-| 2. 纯色矩形 | 一个 Quad + FlatColor pipeline | `Quad` + `PipelineSet.flat_color` + `DrawContext` | |
+| 1. 开窗 | wgpu + winit 初始化，清屏为纯色 | `GraphicsState` + `mkxp-window` | ✅ |
+| 2. 纯色矩形 | 一个 Quad + FlatColor pipeline | `Quad` + `PipelineSet.flat_color` | ✅ |
 | 3. 贴图 | 加载 PNG，创建纹理，画纹理四边形 | `Bitmap` + `PipelineSet.simple` | |
 | 4. 移动 | 每帧改 transform，画动态精灵 | `Sprite` + `scene_graph.composite()` | |
 | 5. 重叠 | 两个精灵，z 序不同 | `SceneGraph` Z 序 + `ensure_children_sorted` | |
 | 6. 裁剪 | 一个 Viewport，子精灵被切掉 | `Viewport` + `ChildrenMode::BeforeSelf` + `ScissorStack` | |
 | 7. 滤镜 | 后处理灰度/色调/亮度 | `PingPong` + `PostProcess` | |
 
-每一步都是在上一步的代码基础上加东西，每步可见。最终七个步骤走完，
-就有了一个完整的 `GraphicsState::update()` 帧循环。
+每一步都是在上一步的代码基础上加东西，每步可见。
 
 ### 步骤 1 实现摘要
 
@@ -1328,14 +1327,28 @@ Ruby 对象持有 `Arc<SpriteData>`，SceneGraph 持有 `Weak<SpriteData>`。
 - `GraphicsState::new(device, queue, surface, config, w, h)` — 初始化
 - `GraphicsState::update()` — 清屏 + present
 - `GraphicsState::on_resize(w, h)` — 窗口缩放
-- `GraphicsState::set_debug_clear_color(r, g, b)` — 临时调试接口
-- 5 个纯函数单元测试（颜色裁剪 + 尺寸验证）
+- 纯函数单元测试（表面尺寸验证）
 - `#[instrument]` + `tracing` 日志
 
 `mkxp-window` crate（二进制）：
 - winit 事件循环 → wgpu surface → GraphicsState 全链路
 - 测试线程通过 `Arc<Mutex<GraphicsState>>` 改背景色，验证跨线程通信
-- `tracing-subscriber` + `RUST_LOG` 日志
+
+### 步骤 2 实现摘要
+
+新增模块：
+
+| 文件 | 内容 |
+|---|---|
+| `geometry/vertex.rs` | `Vertex` — GPU 管线最小输入（position + color），`Pod + Zeroable` |
+| `geometry/quad.rs` | `Quad` — 4 顶点 + 6 索引（`[0,1,2, 0,2,3]`）拼 2 三角形 |
+| `pipeline/set.rs` | `PipelineSet` — FlatColor WGSL 内联编译 + uniform bind group |
+
+帧率控制：
+
+macOS 上 winit 的 `Poll` 和 `request_redraw()` 不可靠（winit #2640），
+采用 `PresentMode::Immediate` + `ControlFlow::WaitUntil` — 系统级定时器
+独立于事件循环节奏。帧率通过 `FPS` 常量配置（XP=40, VX/Ace=60）。
 
 ---
 
