@@ -48,6 +48,9 @@ pub struct GraphicsState {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
+    /// 游戏画面区域背景四边形（区别于黑边）。
+    bg_quad: Quad,
+
     /// 测试用四边形。
     test_quad: Quad,
 }
@@ -83,6 +86,13 @@ impl GraphicsState {
         let win_w = surface_config.width;
         let win_h = surface_config.height;
 
+        // 游戏画面背景：暗蓝色，填满整个游戏区域
+        let bg_quad = Quad::new(
+            &device,
+            0.0, 0.0, screen_width as f32, screen_height as f32,
+            [0.05, 0.05, 0.15, 1.0],
+        );
+
         let test_quad = Quad::new(
             &device,
             (surface_config.width as f32 - 200.0) / 2.0,
@@ -101,6 +111,7 @@ impl GraphicsState {
             game_size,
             target_fps,
             game_viewport,
+            bg_quad,
             pipelines,
             uniform_buffer,
             uniform_bind_group,
@@ -159,10 +170,14 @@ impl GraphicsState {
             // 将渲染限制在游戏画面区域内
             render_pass.set_viewport(vpx as f32, vpy as f32, vpw as f32, vph as f32, 0.0, 1.0);
 
-            // 画测试四边形
-            self.test_quad.flush(&self.queue);
             render_pass.set_pipeline(&self.pipelines.flat_color);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
+            // 游戏区域背景（暗蓝色，区别于黑边）
+            self.bg_quad.draw(&mut render_pass);
+
+            // 测试四边形
+            self.test_quad.flush(&self.queue);
             self.test_quad.draw(&mut render_pass);
         }
 
