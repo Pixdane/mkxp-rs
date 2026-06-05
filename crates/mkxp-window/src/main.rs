@@ -9,6 +9,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
+use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+
 use mkxp_graphics::GraphicsState;
 
 const DEFAULT_FPS: u32 = 60;
@@ -22,17 +24,35 @@ fn main() {
         .expect("event loop error");
 }
 
-#[derive(Default)]
 struct App {
     window: Option<Window>,
     graphics: Option<Arc<Mutex<GraphicsState>>>,
+    menu_receiver: Option<crossbeam_channel::Receiver<MenuEvent>>,
 
     scale_locked: bool,
     scale_factor: u32,
     aspect_locked: bool,
-
-    /// 正在主动调整窗口尺寸，跳过 Resized 事件避免反弹。
     resizing: bool,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            window: None,
+            graphics: None,
+            menu_receiver: None,
+            scale_locked: false,
+            scale_factor: 1,
+            aspect_locked: false,
+            resizing: false,
+        }
+    }
+}
+
+impl std::ops::Drop for App {
+    fn drop(&mut self) {
+        // Menu 需要显式 drop 来清理平台资源（macOS NSMenu）
+    }
 }
 
 impl ApplicationHandler for App {
@@ -44,11 +64,14 @@ impl ApplicationHandler for App {
         let window = event_loop
             .create_window(
                 WindowAttributes::default()
-                    .with_title("mkxp-rs — A:aspect S:scale +/-:zoom 0:reset")
+                    .with_title("mkxp-rs")
                     .with_resizable(true)
-                    .with_inner_size(PhysicalSize::new(640, 480)),
+                    .with_inner_size(PhysicalSize::new(GAME_W, GAME_H)),
             )
             .expect("failed to create window");
+
+        // ── 菜单栏 ──
+        let menu_receiver = Self::build_menu().expect("failed to create menu");
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -78,8 +101,8 @@ impl ApplicationHandler for App {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface.get_capabilities(&adapter).formats[0],
-            width: 640,
-            height: 480,
+            width: GAME_W,
+            height: GAME_H,
             #[cfg(target_os = "macos")]
             present_mode: wgpu::PresentMode::Immediate,
             #[cfg(not(target_os = "macos"))]
@@ -122,6 +145,7 @@ impl ApplicationHandler for App {
         });
 
         self.scale_factor = 1;
+        self.menu_receiver = Some(menu_receiver);
         self.graphics = Some(graphics);
         self.window = Some(window);
     }
@@ -174,27 +198,17 @@ impl ApplicationHandler for App {
                 KeyCode::KeyA => {
                     self.aspect_locked = !self.aspect_locked;
                     self.scale_locked = false;
-                    println!(
-                        "aspect ratio lock: {}  scale lock: off",
-                        self.aspect_locked
-                    );
-                    // 重新约束当前窗口
                     self.reapply_constraints();
                 }
                 KeyCode::KeyS => {
                     self.scale_locked = !self.scale_locked;
                     self.aspect_locked = false;
-                    println!(
-                        "integer scale lock: {} ({}×)  aspect lock: off",
-                        self.scale_locked, self.scale_factor
-                    );
                     self.reapply_constraints();
                 }
                 KeyCode::Equal | KeyCode::NumpadAdd => {
                     if self.scale_factor < 8 {
                         self.scale_factor += 1;
                     }
-                    println!("scale: {}×", self.scale_factor);
                     if self.scale_locked {
                         self.reapply_constraints();
                     }
@@ -203,7 +217,6 @@ impl ApplicationHandler for App {
                     if self.scale_factor > 1 {
                         self.scale_factor -= 1;
                     }
-                    println!("scale: {}×", self.scale_factor);
                     if self.scale_locked {
                         self.reapply_constraints();
                     }
@@ -212,7 +225,6 @@ impl ApplicationHandler for App {
                     self.aspect_locked = false;
                     self.scale_locked = false;
                     self.scale_factor = 1;
-                    println!("reset all constraints");
                     self.reapply_constraints();
                 }
                 _ => {}
@@ -223,6 +235,9 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // 处理菜单事件
+        self.poll_menu_events(event_loop);
+
         let frame_start = Instant::now();
 
         let fps = if let Some(ref graphics) = self.graphics {
@@ -241,6 +256,100 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    fn build_menu() -> Result<crossbeam_channel::Receiver<MenuEvent>, muda::Error> {
+        let menu = Menu::new();
+
+        // ── View ──
+        let view_menu = Submenu::new("View", true);
+        let scale_1x = MenuItem::new("1x (640\u{d7}480)", true, None);
+        let scale_2x = MenuItem::new("2x (1280\u{d7}960)", true, None);
+        let scale_3x = MenuItem::new("3x (1920\u{d7}1440)", true, None);
+        let scale_4x = MenuItem::new("4x (2560\u{d7}1920)", true, None);
+        let lock_aspect = MenuItem::new(
+            "Lock Aspect Ratio",
+            true,
+            None,
+        );
+        let lock_scale = MenuItem::new(
+            "Lock Integer Scale",
+            true,
+            None,
+        );
+        view_menu.append_items(&[&scale_1x, &scale_2x, &scale_3x, &scale_4x])?;
+        view_menu.append(&PredefinedMenuItem::separator())?;
+        view_menu.append_items(&[&lock_aspect, &lock_scale])?;
+
+        // ── Help ──
+        let help_menu = Submenu::new("Help", true);
+        let about = MenuItem::new("About mkxp-rs", true, None);
+        help_menu.append(&about)?;
+
+        // ── 组装 ──
+        menu.append(&view_menu)?;
+        menu.append(&help_menu)?;
+
+        // ── macOS 应用菜单（Quit 等）──
+        let app_menu = Submenu::new("mkxp-rs", true);
+        app_menu.append(&PredefinedMenuItem::quit(None))?;
+        menu.insert(&app_menu, 0)?;
+
+        Ok(MenuEvent::receiver().clone())
+    }
+
+    fn poll_menu_events(&mut self, event_loop: &ActiveEventLoop) {
+        let receiver = match &self.menu_receiver {
+            Some(r) => r,
+            None => return,
+        };
+
+        while let Ok(event) = receiver.try_recv() {
+            match event.id.0.as_str() {
+                "1x (640\u{d7}480)" => {
+                    self.scale_locked = true;
+                    self.aspect_locked = false;
+                    self.scale_factor = 1;
+                    self.reapply_constraints();
+                }
+                "2x (1280\u{d7}960)" => {
+                    self.scale_locked = true;
+                    self.aspect_locked = false;
+                    self.scale_factor = 2;
+                    self.reapply_constraints();
+                }
+                "3x (1920\u{d7}1440)" => {
+                    self.scale_locked = true;
+                    self.aspect_locked = false;
+                    self.scale_factor = 3;
+                    self.reapply_constraints();
+                }
+                "4x (2560\u{d7}1920)" => {
+                    self.scale_locked = true;
+                    self.aspect_locked = false;
+                    self.scale_factor = 4;
+                    self.reapply_constraints();
+                }
+                "Lock Aspect Ratio" => {
+                    self.aspect_locked = !self.aspect_locked;
+                    self.scale_locked = false;
+                    self.reapply_constraints();
+                }
+                "Lock Integer Scale" => {
+                    self.scale_locked = !self.scale_locked;
+                    self.aspect_locked = false;
+                    self.reapply_constraints();
+                }
+                "quit" | "About mkxp-rs" => {
+                    // quit: macOS Cmd+Q
+                    // about: show placeholder
+                    if event.id.0 == "quit" {
+                        event_loop.exit();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn constrain_size(&self, w: u32, h: u32) -> (u32, u32) {
         if self.scale_locked {
             let s = self.scale_factor.max(1);
@@ -259,19 +368,20 @@ impl App {
     }
 
     fn reapply_constraints(&self) {
-        let window = match &self.window {
-            Some(w) => w,
-            None => return,
-        };
-        let size = window.inner_size();
-        let constrained = self.constrain_size(size.width, size.height);
-        if constrained != (size.width, size.height) {
-            let _ = window.request_inner_size(PhysicalSize::new(constrained.0, constrained.1));
-        } else if let Some(ref graphics) = self.graphics {
-            graphics
-                .lock()
-                .unwrap()
-                .on_resize(constrained.0, constrained.1);
+        if let Some(ref window) = self.window {
+            let size = window.inner_size();
+            let constrained = self.constrain_size(size.width, size.height);
+            if constrained != (size.width, size.height) {
+                let _ = window.request_inner_size(PhysicalSize::new(
+                    constrained.0,
+                    constrained.1,
+                ));
+            } else if let Some(ref graphics) = self.graphics {
+                graphics
+                    .lock()
+                    .unwrap()
+                    .on_resize(constrained.0, constrained.1);
+            }
         }
     }
 }

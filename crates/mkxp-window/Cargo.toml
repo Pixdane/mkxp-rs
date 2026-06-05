@@ -13,4 +13,6 @@ mkxp-graphics = { path = "../mkxp-graphics" }
 winit = "0.30"
 wgpu = "24"
 pollster = "0.4"
+muda = "0.15"
+crossbeam-channel = "0.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
