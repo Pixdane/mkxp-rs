@@ -34,6 +34,7 @@ struct App {
     scale_factor: u32,
     aspect_locked: bool,
     resizing: bool,
+    internal_resize: bool,
 
     /// 菜单项引用（用于更新 checkmark 状态）。
     mi_scale_1x: Option<CheckMenuItem>,
@@ -55,6 +56,7 @@ impl Default for App {
             scale_factor: 1,
             aspect_locked: false,
             resizing: false,
+            internal_resize: false,
             mi_scale_1x: None,
             mi_scale_2x: None,
             mi_scale_3x: None,
@@ -183,8 +185,12 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(size) => {
-                if self.resizing {
-                    self.resizing = false;
+                // 自己触发的 resize，不清 checkmark
+                if self.internal_resize {
+                    self.internal_resize = false;
+                    if let Some(ref graphics) = self.graphics {
+                        graphics.lock().unwrap().on_resize(size.width, size.height);
+                    }
                     return;
                 }
 
@@ -192,27 +198,24 @@ impl ApplicationHandler for App {
                 let constrained = self.constrain_size(w, h);
 
                 if constrained != (w, h) {
-                    self.resizing = true;
-                    if let Some(ref window) = self.window {
+                    // 窗口尺寸不符合约束（手动拖的），主动修正
+        if let Some(ref window) = self.window {
                         let _ = window.request_inner_size(PhysicalSize::new(
                             constrained.0,
                             constrained.1,
                         ));
                     }
+                    // 不渲染这帧，等修正后的 Resized 事件
+                    return;
                 }
 
-                // 手动缩放（非菜单触发）时清除 fixed scale 选中
-                if constrained == (w, h) && (self.scale_locked || self.aspect_locked) {
-                    // lock 模式下的缩放，不清 checkmark
-                } else if constrained == (w, h) {
+                // 手动缩放且无约束 → 清除 scale checkmark
+                if !self.scale_locked && !self.aspect_locked {
                     self.clear_scale_checkmark();
                 }
 
                 if let Some(ref graphics) = self.graphics {
-                    graphics
-                        .lock()
-                        .unwrap()
-                        .on_resize(constrained.0, constrained.1);
+                    graphics.lock().unwrap().on_resize(w, h);
                 }
             }
 
@@ -444,20 +447,19 @@ match event.id.0.as_str() {
     }
 
     fn reapply_constraints(&self) {
-        if let Some(ref window) = self.window {
-            let size = window.inner_size();
-            let constrained = self.constrain_size(size.width, size.height);
-            if constrained != (size.width, size.height) {
-                let _ = window.request_inner_size(PhysicalSize::new(
-                    constrained.0,
-                    constrained.1,
-                ));
-            } else if let Some(ref graphics) = self.graphics {
-                graphics
-                    .lock()
-                    .unwrap()
-                    .on_resize(constrained.0, constrained.1);
-            }
+        let Some(ref window) = self.window else { return };
+        let size = window.inner_size();
+        let constrained = self.constrain_size(size.width, size.height);
+        if constrained != (size.width, size.height) {
+            let _ = window.request_inner_size(PhysicalSize::new(
+                constrained.0,
+                constrained.1,
+            ));
+        } else if let Some(ref graphics) = self.graphics {
+            graphics
+                .lock()
+                .unwrap()
+                .on_resize(constrained.0, constrained.1);
         }
     }
 }
