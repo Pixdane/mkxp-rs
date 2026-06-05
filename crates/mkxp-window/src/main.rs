@@ -27,6 +27,7 @@ fn main() {
 struct App {
     window: Option<Window>,
     graphics: Option<Arc<Mutex<GraphicsState>>>,
+    _menu: Option<Menu>,
     menu_receiver: Option<crossbeam_channel::Receiver<MenuEvent>>,
 
     scale_locked: bool,
@@ -40,6 +41,7 @@ impl Default for App {
         Self {
             window: None,
             graphics: None,
+            _menu: None,
             menu_receiver: None,
             scale_locked: false,
             scale_factor: 1,
@@ -71,7 +73,7 @@ impl ApplicationHandler for App {
             .expect("failed to create window");
 
         // ── 菜单栏 ──
-        let menu_receiver = Self::build_menu().expect("failed to create menu");
+        let (menu, menu_receiver) = Self::build_menu().expect("failed to create menu");
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -145,6 +147,7 @@ impl ApplicationHandler for App {
         });
 
         self.scale_factor = 1;
+        self._menu = Some(menu);
         self.menu_receiver = Some(menu_receiver);
         self.graphics = Some(graphics);
         self.window = Some(window);
@@ -256,7 +259,7 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    fn build_menu() -> Result<crossbeam_channel::Receiver<MenuEvent>, muda::Error> {
+    fn build_menu() -> Result<(Menu, crossbeam_channel::Receiver<MenuEvent>), muda::Error> {
         let menu = Menu::new();
 
         // ── View ──
@@ -293,7 +296,7 @@ impl App {
         app_menu.append(&PredefinedMenuItem::quit(None))?;
         menu.insert(&app_menu, 0)?;
 
-        Ok(MenuEvent::receiver().clone())
+        Ok((menu, MenuEvent::receiver().clone()))
     }
 
     fn poll_menu_events(&mut self, event_loop: &ActiveEventLoop) {
