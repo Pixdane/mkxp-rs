@@ -261,16 +261,12 @@ impl App {
         match key {
             KeyCode::KeyA => {
                 self.aspect_locked = !self.aspect_locked;
-                self.scale_locked = false;
                 self.sync_lock_marks();
-                self.clear_scale_marks();
                 self.resize_to_fit();
             }
             KeyCode::KeyS => {
                 self.scale_locked = !self.scale_locked;
-                self.aspect_locked = false;
                 self.sync_lock_marks();
-                self.clear_scale_marks();
                 self.resize_to_fit();
             }
             KeyCode::Equal | KeyCode::NumpadAdd => {
@@ -316,8 +312,8 @@ impl App {
                 "scale_2x" => { self.scale_locked = true; self.scale_factor = 2; self.sync_scale_mark(2); self.resize_to_fit(); }
                 "scale_3x" => { self.scale_locked = true; self.scale_factor = 3; self.sync_scale_mark(3); self.resize_to_fit(); }
                 "scale_4x" => { self.scale_locked = true; self.scale_factor = 4; self.sync_scale_mark(4); self.resize_to_fit(); }
-                "lock_aspect" => { self.aspect_locked = !self.aspect_locked; self.scale_locked = false; self.sync_lock_marks(); self.clear_scale_marks(); self.resize_to_fit(); }
-                "lock_scale" => { self.scale_locked = !self.scale_locked; self.aspect_locked = false; self.sync_lock_marks(); self.clear_scale_marks(); self.resize_to_fit(); }
+                "lock_aspect" => { self.aspect_locked = !self.aspect_locked; self.sync_lock_marks(); self.resize_to_fit(); }
+                "lock_scale" => { self.scale_locked = !self.scale_locked; self.sync_lock_marks(); self.resize_to_fit(); }
                 "quit" => event_loop.exit(),
                 _ => {}
             }
@@ -327,20 +323,23 @@ impl App {
     // ── constraint math ──
 
     fn constrain_size(&self, w: u32, h: u32) -> (u32, u32) {
+        let (mut cw, mut ch) = (w, h);
+        // aspect lock: fit inside target ratio
+        if self.aspect_locked {
+            let target = GAME_W as f32 / GAME_H as f32;
+            if cw as f32 / ch as f32 > target {
+                cw = (ch as f32 * target) as u32;
+            } else {
+                ch = (cw as f32 / target) as u32;
+            }
+        }
+        // scale lock: snap to nearest integer multiple
         if self.scale_locked {
             let s = self.scale_factor.max(1);
-            (s * GAME_W, s * GAME_H)
-        } else if self.aspect_locked {
-            let target = GAME_W as f32 / GAME_H as f32;
-            let current = w as f32 / h as f32;
-            if current > target {
-                ((h as f32 * target) as u32, h)
-            } else {
-                (w, (w as f32 / target) as u32)
-            }
-        } else {
-            (w, h)
+            cw = s * GAME_W;
+            ch = s * GAME_H;
         }
+        (cw, ch)
     }
 
     fn resize_to_fit(&mut self) {
