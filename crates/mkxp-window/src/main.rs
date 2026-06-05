@@ -40,7 +40,7 @@ struct App {
     scale_locked: bool,
     scale_factor: u32,
     aspect_locked: bool,
-    self_applied: bool,
+    expected_size: Option<(u32, u32)>,
 
     mi_scale_1x: Option<CheckMenuItem>,
     mi_scale_2x: Option<CheckMenuItem>,
@@ -60,7 +60,7 @@ impl Default for App {
             scale_locked: false,
             scale_factor: 1,
             aspect_locked: false,
-            self_applied: false,
+            expected_size: None,
             mi_scale_1x: None,
             mi_scale_2x: None,
             mi_scale_3x: None,
@@ -237,16 +237,16 @@ impl App {
     // ── resize ──
 
     fn handle_resize(&mut self, w: u32, h: u32) {
-        if self.self_applied {
-            self.self_applied = false;
+        // 回来的是我们自己请求的尺寸
+        if self.expected_size == Some((w, h)) {
+            self.expected_size = None;
         } else if self.scale_locked || self.aspect_locked {
             let c = self.constrain_size(w, h);
             if c != (w, h) {
-                self.self_applied = true;
+                self.expected_size = Some(c);
                 if let Some(ref window) = self.window {
                     let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
                 }
-                // 更新 scale checkmark 反映当前倍率
                 if self.scale_locked {
                     self.scale_factor = c.0 / GAME_W;
                     self.sync_scale_mark(self.scale_factor);
@@ -352,12 +352,11 @@ impl App {
             let size = window.inner_size();
             let c = self.constrain_size(size.width, size.height);
             if c != (size.width, size.height) {
-                self.self_applied = true;
+                self.expected_size = Some(c);
                 let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
             } else if let Some(ref graphics) = self.graphics {
                 graphics.lock().unwrap().on_resize(c.0, c.1);
             }
-            // 同步 scale checkmark
             if self.scale_locked {
                 self.scale_factor = c.0 / GAME_W;
                 self.sync_scale_mark(self.scale_factor);
