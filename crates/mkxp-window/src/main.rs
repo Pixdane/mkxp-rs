@@ -296,6 +296,9 @@ impl App {
         app_menu.append(&PredefinedMenuItem::quit(None))?;
         menu.insert(&app_menu, 0)?;
 
+        #[cfg(target_os = "macos")]
+        menu.init_for_nsapp();
+
         Ok((menu, MenuEvent::receiver().clone()))
     }
 
