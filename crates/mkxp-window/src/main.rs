@@ -264,12 +264,12 @@ impl App {
 
         // ── View ──
         let view_menu = Submenu::new("View", true);
-        let scale_1x = MenuItem::new("1x (640\u{d7}480)", true, None);
-        let scale_2x = MenuItem::new("2x (1280\u{d7}960)", true, None);
-        let scale_3x = MenuItem::new("3x (1920\u{d7}1440)", true, None);
-        let scale_4x = MenuItem::new("4x (2560\u{d7}1920)", true, None);
-        let lock_aspect = MenuItem::with_id("lock_aspect", "lock_aspect", true, None);
-        let lock_scale = MenuItem::with_id("lock_scale", "lock_scale", true, None);
+        let scale_1x = MenuItem::with_id("scale_1x", "1x (640\u{d7}480)", true, None);
+        let scale_2x = MenuItem::with_id("scale_2x", "2x (1280\u{d7}960)", true, None);
+        let scale_3x = MenuItem::with_id("scale_3x", "3x (1920\u{d7}1440)", true, None);
+        let scale_4x = MenuItem::with_id("scale_4x", "4x (2560\u{d7}1920)", true, None);
+        let lock_aspect = MenuItem::with_id("lock_aspect", "Lock Aspect Ratio", true, None);
+        let lock_scale = MenuItem::with_id("lock_scale", "Lock Integer Scale", true, None);
         view_menu.append_items(&[&scale_1x, &scale_2x, &scale_3x, &scale_4x])?;
         view_menu.append(&PredefinedMenuItem::separator())?;
         view_menu.append_items(&[&lock_aspect, &lock_scale])?;
@@ -302,25 +302,25 @@ impl App {
 
         while let Ok(event) = receiver.try_recv() {
 match event.id.0.as_str() {
-                "1x (640\u{d7}480)" => {
+                "scale_1x" => {
                     self.scale_locked = true;
                     self.aspect_locked = false;
                     self.scale_factor = 1;
                     self.reapply_constraints();
                 }
-                "2x (1280\u{d7}960)" => {
+                "scale_2x" => {
                     self.scale_locked = true;
                     self.aspect_locked = false;
                     self.scale_factor = 2;
                     self.reapply_constraints();
                 }
-                "3x (1920\u{d7}1440)" => {
+                "scale_3x" => {
                     self.scale_locked = true;
                     self.aspect_locked = false;
                     self.scale_factor = 3;
                     self.reapply_constraints();
                 }
-                "4x (2560\u{d7}1920)" => {
+                "scale_4x" => {
                     self.scale_locked = true;
                     self.aspect_locked = false;
                     self.scale_factor = 4;
