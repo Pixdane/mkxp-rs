@@ -1,41 +1,7 @@
 use crate::geometry::Vertex;
 use wgpu::util::DeviceExt;
 
-/// 纯色四边形 WGSL 着色器源码。
-const FLAT_COLOR_SHADER: &str = r#"
-struct VertexInput {
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-}
 
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-}
-
-struct Uniforms {
-    screen_size: vec2<f32>,
-}
-
-@group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
-
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-    var out: VertexOutput;
-    // 像素坐标 → NDC (-1..1)
-    let x = (in.position.x / uniforms.screen_size.x) * 2.0 - 1.0;
-    let y = 1.0 - (in.position.y / uniforms.screen_size.y) * 2.0;
-    out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color;
-}
-"#;
 
 /// 传递给 FlatColor pipeline 的 uniform 数据。
 ///
@@ -61,7 +27,7 @@ impl PipelineSet {
     ) -> Self {
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flat_color"),
-            source: wgpu::ShaderSource::Wgsl(FLAT_COLOR_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/flat_color.wgsl").into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

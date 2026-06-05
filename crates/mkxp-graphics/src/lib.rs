@@ -28,6 +28,9 @@ pub struct GraphicsState {
 
     pub window_size: (u32, u32),
 
+    /// 目标帧率。可通过 `set_target_fps` 运行时修改。
+    target_fps: u32,
+
     /// 预编译的 pipeline。
     pub pipelines: PipelineSet,
 
@@ -49,6 +52,7 @@ impl GraphicsState {
         surface_config: SurfaceConfiguration,
         screen_width: u32,
         screen_height: u32,
+        target_fps: u32,
     ) -> Self {
         info!("graphics state initialized");
 
@@ -75,6 +79,7 @@ impl GraphicsState {
             surface,
             surface_config,
             window_size: (screen_width, screen_height),
+            target_fps,
             pipelines,
             uniform_buffer,
             uniform_bind_group,
@@ -159,6 +164,16 @@ impl GraphicsState {
     }
 
     /// 移动测试四边形（临时 API，场景图就绪后删除）。
+    /// 目标帧率。
+    pub fn target_fps(&self) -> u32 {
+        self.target_fps
+    }
+
+    /// 设置目标帧率。运行时可变，下一帧生效。
+    pub fn set_target_fps(&mut self, fps: u32) {
+        self.target_fps = fps.clamp(1, 240);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn set_test_quad(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, g: f32, b: f32) {
         self.test_quad.set_pos(x, y, w, h);

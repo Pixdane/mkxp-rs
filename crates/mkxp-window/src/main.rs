@@ -9,9 +9,7 @@ use winit::window::WindowAttributes;
 
 use mkxp_graphics::GraphicsState;
 
-/// 目标帧率。改为 40 即 XP 模式，60 即 VX/Ace 模式。
-const FPS: u32 = 60;
-const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FPS as u64);
+
 
 fn main() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
@@ -65,14 +63,18 @@ impl ApplicationHandler for App {
             format: surface.get_capabilities(&adapter).formats[0],
             width: 640,
             height: 480,
+            #[cfg(target_os = "macos")]
             present_mode: wgpu::PresentMode::Immediate,
+            #[cfg(not(target_os = "macos"))]
+            present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
 
+        let target_fps = 60;  // XP = 40, VX/Ace = 60
         let graphics = Arc::new(Mutex::new(GraphicsState::new(
-            device, queue, surface, surface_config, 640, 480,
+            device, queue, surface, surface_config, 640, 480, target_fps,
         )));
 
         let gfx = graphics.clone();
@@ -124,11 +126,22 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(ref graphics) = self.graphics {
-            let _ = graphics.lock().unwrap().update();
-        }
+        let frame_start = Instant::now();
+
+        let fps = if let Some(ref graphics) = self.graphics {
+            let mut g = graphics.lock().unwrap();
+            let _ = g.update();
+            g.target_fps()
+        } else {
+            60
+        };
+
+        let frame_duration = Duration::from_nanos(1_000_000_000 / fps as u64);
+
+        // 从帧开始计时，渲染时间包含在帧预算内。
+        // 超过预算时 max 取 Instant::now()，下一帧不等待。
         event_loop.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + FRAME_DURATION,
+            (frame_start + frame_duration).max(Instant::now()),
         ));
     }
 }

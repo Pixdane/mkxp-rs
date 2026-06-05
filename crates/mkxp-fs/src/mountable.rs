@@ -33,7 +33,7 @@ impl RealDirectory {
     /// Create from a filesystem path.  Returns an error if `root` is not
     /// a readable directory.
     pub fn new(root: &Path) -> Result<Self, FsError> {
-        let canonical = root.canonicalize().map_err(|e| FsError::io(e))?;
+        let canonical = root.canonicalize().map_err(FsError::io)?;
         if !canonical.is_dir() {
             return Err(FsError::NotADirectory {
                 path: root.display().to_string(),
@@ -53,7 +53,7 @@ impl RealDirectory {
     /// Used for defence-in-depth (symlink escape prevention).
     fn checked(&self, vp: &VPath) -> Result<std::path::PathBuf, FsError> {
         let p = self.physical(vp);
-        let resolved = p.canonicalize().map_err(|e| FsError::io(e))?;
+        let resolved = p.canonicalize().map_err(FsError::io)?;
         if !resolved.starts_with(&self.root) {
             return Err(FsError::PathEscape {
                 path: vp.as_str().to_string(),
@@ -111,11 +111,11 @@ impl Mountable for RealDirectory {
                 path: dir.as_str().to_string(),
             });
         }
-        let rd = std::fs::read_dir(&real).map_err(|e| FsError::io(e))?;
+        let rd = std::fs::read_dir(&real).map_err(FsError::io)?;
         let mut entries = Vec::new();
         for entry in rd {
-            let entry = entry.map_err(|e| FsError::io(e))?;
-            let ft = entry.file_type().map_err(|e| FsError::io(e))?;
+            let entry = entry.map_err(FsError::io)?;
+            let ft = entry.file_type().map_err(FsError::io)?;
             if let Some(name) = entry.file_name().to_str() {
                 let suffix = if ft.is_dir() { "/" } else { "" };
                 entries.push(format!("{name}{suffix}"));

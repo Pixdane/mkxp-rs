@@ -286,9 +286,7 @@ impl RgssArchive {
             // Skip past the file data to the next entry header.
             pos = data_offset + size as usize;
             if pos > raw.len() {
-                return Err(FsError::parse(format!(
-                    "RGSS file data extends past archive end"
-                )));
+                return Err(FsError::parse("RGSS file data extends past archive end".to_string()));
             }
         }
 
