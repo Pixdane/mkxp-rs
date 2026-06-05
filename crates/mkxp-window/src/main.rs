@@ -240,12 +240,16 @@ impl App {
         if self.self_applied {
             self.self_applied = false;
         } else if self.scale_locked || self.aspect_locked {
-            // 锁活跃 → 约束拖拽，不放弃锁
             let c = self.constrain_size(w, h);
             if c != (w, h) {
                 self.self_applied = true;
                 if let Some(ref window) = self.window {
                     let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
+                }
+                // 更新 scale checkmark 反映当前倍率
+                if self.scale_locked {
+                    self.scale_factor = c.0 / GAME_W;
+                    self.sync_scale_mark(self.scale_factor);
                 }
                 return;
             }
@@ -324,7 +328,6 @@ impl App {
 
     fn constrain_size(&self, w: u32, h: u32) -> (u32, u32) {
         let (mut cw, mut ch) = (w, h);
-        // aspect lock: fit inside target ratio
         if self.aspect_locked {
             let target = GAME_W as f32 / GAME_H as f32;
             if cw as f32 / ch as f32 > target {
@@ -333,9 +336,11 @@ impl App {
                 ch = (cw as f32 / target) as u32;
             }
         }
-        // scale lock: snap to nearest integer multiple
         if self.scale_locked {
-            let s = self.scale_factor.max(1);
+            // 自动根据当前尺寸算最接近的整数倍
+            let sw = (cw as f32 / GAME_W as f32).round() as u32;
+            let sh = (ch as f32 / GAME_H as f32).round() as u32;
+            let s = sw.max(sh).max(1);
             cw = s * GAME_W;
             ch = s * GAME_H;
         }
@@ -351,6 +356,11 @@ impl App {
                 let _ = window.request_inner_size(PhysicalSize::new(c.0, c.1));
             } else if let Some(ref graphics) = self.graphics {
                 graphics.lock().unwrap().on_resize(c.0, c.1);
+            }
+            // 同步 scale checkmark
+            if self.scale_locked {
+                self.scale_factor = c.0 / GAME_W;
+                self.sync_scale_mark(self.scale_factor);
             }
         }
     }
