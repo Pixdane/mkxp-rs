@@ -26,15 +26,25 @@ pub struct GraphicsState {
     pub surface: Surface<'static>,
     surface_config: SurfaceConfiguration,
 
-    pub window_size: (u32, u32),
+    /// 当前窗口物理尺寸。
+    #[allow(dead_code)]
+    window_size: (u32, u32),
+
+    /// 游戏内容的固定分辨率。XP = (640,480), VX/Ace = (544,416)。
+    game_size: (u32, u32),
 
     /// 目标帧率。可通过 `set_target_fps` 运行时修改。
     target_fps: u32,
+
+    /// 窗口内游戏画面的区域（保持宽高比、居中、其余黑色填充）。
+    /// 每次 on_resize 时重新计算。
+    game_viewport: (u32, u32, u32, u32),  // (x, y, w, h)
 
     /// 预编译的 pipeline。
     pub pipelines: PipelineSet,
 
     /// uniform buffer + bind group（flat_color pipeline 用）。
+    #[allow(dead_code)]
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
@@ -58,12 +68,21 @@ impl GraphicsState {
 
         surface.configure(&device, &surface_config);
 
+        let game_size = (screen_width, screen_height);
+        let game_viewport = letterbox_viewport(
+            surface_config.width, surface_config.height, game_size.0, game_size.1,
+        );
+
         let pipelines = PipelineSet::new(&device, surface_config.format);
+        // 渲染坐标系始终以游戏分辨率为准
         let (uniform_buffer, uniform_bind_group) = PipelineSet::create_uniform_bind_group(
-            &device, surface_config.width, surface_config.height,
+            &device, game_size.0, game_size.1,
         );
 
         // 初始位置：画面中央一个 200×150 的红色方块
+        let win_w = surface_config.width;
+        let win_h = surface_config.height;
+
         let test_quad = Quad::new(
             &device,
             (surface_config.width as f32 - 200.0) / 2.0,
@@ -78,8 +97,10 @@ impl GraphicsState {
             queue,
             surface,
             surface_config,
-            window_size: (screen_width, screen_height),
+            window_size: (win_w, win_h),
+            game_size,
             target_fps,
+            game_viewport,
             pipelines,
             uniform_buffer,
             uniform_bind_group,
@@ -117,7 +138,9 @@ impl GraphicsState {
         );
 
         {
-            // 清屏为黑色
+            let (vpx, vpy, vpw, vph) = self.game_viewport;
+
+            // 清屏为黑色（全窗口），viewport 限制游戏画面范围
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -132,6 +155,9 @@ impl GraphicsState {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
+            // 将渲染限制在游戏画面区域内
+            render_pass.set_viewport(vpx as f32, vpy as f32, vpw as f32, vph as f32, 0.0, 1.0);
 
             // 画测试四边形
             self.test_quad.flush(&self.queue);
@@ -155,12 +181,11 @@ impl GraphicsState {
         }
         debug!("surface resized");
         self.window_size = (width, height);
+        self.game_viewport = letterbox_viewport(width, height, self.game_size.0, self.game_size.1);
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-
-        // 更新 uniform 里的屏幕尺寸，让 shader 用新的投影
-        PipelineSet::update_uniforms(&self.queue, &self.uniform_buffer, width, height);
+        // 不更新 uniform——shader 始终以游戏分辨率为坐标系
     }
 
     /// 移动测试四边形（临时 API，场景图就绪后删除）。
@@ -179,6 +204,32 @@ impl GraphicsState {
         self.test_quad.set_pos(x, y, w, h);
         self.test_quad.set_color(r, g, b, 1.0);
     }
+}
+
+/// 计算窗口内游戏画面的显示区域。
+///
+/// 保持 `game_w:game_h` 宽高比不变，一个方向填满，另一个方向居中留黑边。
+/// 返回 `(x, y, w, h)` 像素坐标。
+fn letterbox_viewport(window_w: u32, window_h: u32, game_w: u32, game_h: u32) -> (u32, u32, u32, u32) {
+    let window_ratio = window_w as f32 / window_h as f32;
+    let game_ratio = game_w as f32 / game_h as f32;
+
+    let (vpw, vph) = if window_ratio > game_ratio {
+        // 窗口更宽：高度填满，宽度按比例缩小
+        let h = window_h;
+        let w = (window_h as f32 * game_ratio) as u32;
+        (w, h)
+    } else {
+        // 窗口更高：宽度填满，高度按比例缩小
+        let w = window_w;
+        let h = (window_w as f32 / game_ratio) as u32;
+        (w, h)
+    };
+
+    let x = (window_w.saturating_sub(vpw)) / 2;
+    let y = (window_h.saturating_sub(vph)) / 2;
+
+    (x, y, vpw, vph)
 }
 
 fn valid_surface_size(width: u32, height: u32) -> bool {
@@ -200,5 +251,38 @@ mod tests {
         assert!(!valid_surface_size(0, 480));
         assert!(!valid_surface_size(640, 0));
         assert!(!valid_surface_size(0, 0));
+    }
+
+    #[test]
+    fn letterbox_exact_match() {
+        // 窗口和游戏宽高比一致，填满
+        let (x, y, w, h) = letterbox_viewport(640, 480, 640, 480);
+        assert_eq!((x, y, w, h), (0, 0, 640, 480));
+    }
+
+    #[test]
+    fn letterbox_window_wider() {
+        // 窗口比游戏宽，左右留黑
+        let (x, y, w, h) = letterbox_viewport(960, 480, 640, 480);
+        assert_eq!(h, 480);         // 高度填满
+        assert_eq!(w, 640);         // 宽度保持 4:3
+        assert_eq!(x, 160);         // 左边黑边
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn letterbox_window_taller() {
+        // 窗口比游戏高，上下留黑
+        let (x, y, w, h) = letterbox_viewport(640, 640, 640, 480);
+        assert_eq!(w, 640);         // 宽度填满
+        assert_eq!(h, 480);         // 高度保持 4:3
+        assert_eq!(x, 0);
+        assert_eq!(y, 80);          // 上边黑边
+    }
+
+    #[test]
+    fn letterbox_doubled() {
+        let (x, y, w, h) = letterbox_viewport(1280, 960, 640, 480);
+        assert_eq!((x, y, w, h), (0, 0, 1280, 960));
     }
 }

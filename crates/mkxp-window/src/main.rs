@@ -33,6 +33,7 @@ impl ApplicationHandler for App {
             .create_window(
                 WindowAttributes::default()
                     .with_title("mkxp-rs test")
+                    .with_resizable(true)
                     .with_inner_size(winit::dpi::PhysicalSize::new(640, 480)),
             )
             .expect("failed to create window");
