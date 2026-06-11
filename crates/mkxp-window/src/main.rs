@@ -16,6 +16,7 @@ use mkxp_graphics::{GraphicsState, ViewportScaleMode};
 const DEFAULT_FPS: u32 = 60;
 const GAME_W: u32 = 640;
 const GAME_H: u32 = 480;
+const RESIZE_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
 
 // ── public API for tests ──
 
@@ -56,6 +57,42 @@ fn integer_size(n: u32) -> (u32, u32) {
     (GAME_W * n, GAME_H * n)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PendingResize {
+    target: (u32, u32),
+    requested_at: Instant,
+}
+
+#[derive(Debug, Default)]
+struct ResizeRequestTracker {
+    pending: Option<PendingResize>,
+}
+
+impl ResizeRequestTracker {
+    fn can_request(&self, now: Instant) -> bool {
+        self.pending
+            .map(|pending| now.duration_since(pending.requested_at) > RESIZE_REQUEST_TIMEOUT)
+            .unwrap_or(true)
+    }
+
+    fn mark_requested(&mut self, target: (u32, u32), now: Instant) {
+        self.pending = Some(PendingResize {
+            target,
+            requested_at: now,
+        });
+    }
+
+    fn observe_resized(&mut self, size: (u32, u32), _now: Instant) {
+        if self
+            .pending
+            .map(|pending| pending.target == size)
+            .unwrap_or(false)
+        {
+            self.pending = None;
+        }
+    }
+}
+
 fn main() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop
@@ -85,7 +122,7 @@ struct App {
     menu_receiver: Option<crossbeam_channel::Receiver<MenuEvent>>,
 
     aspect_locked: bool,
-    resize_in_progress: bool,
+    resize_requests: ResizeRequestTracker,
     fullscreen_scale_mode: FullscreenScaleMode,
     modifiers: ModifiersState,
 
@@ -105,7 +142,7 @@ impl Default for App {
             _menu: None,
             menu_receiver: None,
             aspect_locked: false,
-            resize_in_progress: false,
+            resize_requests: ResizeRequestTracker::default(),
             fullscreen_scale_mode: FullscreenScaleMode::Fit,
             modifiers: ModifiersState::default(),
             mi_fit: None,
@@ -310,17 +347,22 @@ impl App {
     // ── resize ──
 
     fn request_single_resize(&mut self, size: (u32, u32)) {
-        if self.resize_in_progress {
+        let now = Instant::now();
+        if !self.resize_requests.can_request(now) {
             return;
         }
-        self.resize_in_progress = true;
-        if let Some(ref window) = self.window {
-            let _ = window.request_inner_size(PhysicalSize::new(size.0, size.1));
+        if let Some(ref window) = self.window
+            && window
+                .request_inner_size(PhysicalSize::new(size.0, size.1))
+                .is_none()
+        {
+            self.resize_requests.mark_requested(size, now);
         }
     }
 
     fn handle_resize(&mut self, w: u32, h: u32) {
-        self.resize_in_progress = false;
+        let now = Instant::now();
+        self.resize_requests.observe_resized((w, h), now);
 
         if !self.is_fullscreen() && self.aspect_locked {
             let c = fit_aspect_size(w, h);
@@ -554,5 +596,31 @@ mod tests {
         assert_eq!(window_scale_mark(0, 0), None);
         assert_eq!(window_scale_mark(640, 0), None);
         assert_eq!(window_scale_mark(0, 480), None);
+    }
+
+    #[test]
+    fn resize_request_tracker_blocks_repeated_requests_until_target_arrives() {
+        let start = Instant::now();
+        let mut tracker = ResizeRequestTracker::default();
+
+        assert!(tracker.can_request(start));
+        tracker.mark_requested((1067, 800), start);
+
+        tracker.observe_resized((1100, 800), start + Duration::from_millis(16));
+        assert!(!tracker.can_request(start + Duration::from_millis(16)));
+
+        tracker.observe_resized((1067, 800), start + Duration::from_millis(32));
+        assert!(tracker.can_request(start + Duration::from_millis(32)));
+    }
+
+    #[test]
+    fn resize_request_tracker_allows_retry_after_timeout() {
+        let start = Instant::now();
+        let mut tracker = ResizeRequestTracker::default();
+
+        tracker.mark_requested((1067, 800), start);
+
+        assert!(!tracker.can_request(start + RESIZE_REQUEST_TIMEOUT / 2));
+        assert!(tracker.can_request(start + RESIZE_REQUEST_TIMEOUT + Duration::from_millis(1)));
     }
 }

@@ -12,7 +12,7 @@
 
 ```rust
 aspect_locked: bool
-resize_in_progress: bool
+pending_resize: Option<PendingResize>
 fullscreen_scale_mode: FullscreenScaleMode
 
 enum FullscreenScaleMode {
@@ -23,7 +23,8 @@ enum FullscreenScaleMode {
 
 - `aspect_locked`：只在窗口模式生效。开启后，所有窗口 resize 输入都被
   强制 snap 到 `4:3`。
-- `resize_in_progress`：防止同一时间发出多个 `request_inner_size` 请求。
+- `pending_resize`：记录一个正在等待系统兑现的 `request_inner_size` 目标尺寸，
+  防止 live resize 期间反复发程序化 resize 请求。
 - `fullscreen_scale_mode`：只在全屏模式影响渲染 viewport。
 
 不再需要 `scale_locked`。整数倍缩放不持续约束窗口，也不影响
@@ -55,7 +56,8 @@ enum FullscreenScaleMode {
 
 ```text
 handle_resize(w, h):
-  resize_in_progress = false
+  if pending_resize.target == (w, h):
+    pending_resize = None
 
   if aspect_locked:
     c = fit_aspect_size(w, h)
@@ -72,7 +74,8 @@ handle_resize(w, h):
 
 ```text
 handle_resize(w, h):
-  resize_in_progress = false
+  if pending_resize.target == (w, h):
+    pending_resize = None
   graphics.on_resize(w, h)
   refresh_menu_marks()
 ```
@@ -83,20 +86,25 @@ handle_resize(w, h):
 ## Resize 防抖
 
 macOS 在拖拽和程序化 resize 时会连续发送大量 `Resized` 事件。
-窗口层只允许同一时间有一个程序化 resize 请求在飞。
+窗口层只允许同一时间有一个程序化 resize 请求在飞。这个请求只能在两种
+情况下解除：
+
+- 收到目标尺寸的 `Resized(target_w, target_h)`。
+- 请求超过短超时（当前实现为 `100ms`），允许下一次修正覆盖旧目标。
 
 ```text
 request_single_resize(size):
-  if resize_in_progress:
+  if pending_resize exists and not timed out:
     return
 
-  resize_in_progress = true
+  pending_resize = (size, now)
   window.request_inner_size(size)
 ```
 
-下一次 `Resized` 到达时，无论尺寸是否与请求完全一致，都清除
-`resize_in_progress`。如果 `aspect_locked` 仍然发现尺寸不合规，可以再发
-下一次修正请求。
+不要在任意下一次 `Resized` 到达时清除 pending。macOS live resize 会在
+拖拽期间持续发送用户输入尺寸；如果每个输入事件都清除 pending 并立即发新
+的 `request_inner_size`，窗口尺寸虽然会被纠正，但事件循环会被 resize 请求
+风暴压住，表现为拖拽卡死。
 
 ## Checkmark 同步
 
@@ -169,7 +177,7 @@ window_scale_mark(w, h):
 request_single_resize(1280, 960)
 
 [Resized(1280, 960)]
-  resize_in_progress = false
+  pending_resize = None
   graphics.on_resize(1280, 960)
   refresh_menu_marks() -> 2x checked
 ```
@@ -182,7 +190,7 @@ fit_aspect_size(current) -> 933x700
 request_single_resize(933, 700)
 
 [Resized(933, 700)]
-  resize_in_progress = false
+  pending_resize = None
   graphics.on_resize(933, 700)
   refresh_menu_marks() -> Fit checked
 ```
