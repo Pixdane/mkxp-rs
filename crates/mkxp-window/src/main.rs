@@ -31,7 +31,6 @@ pub enum ResizeDecision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowScaleMark {
-    Fit,
     Integer(u32),
 }
 
@@ -44,7 +43,7 @@ pub fn fit_aspect_size(w: u32, h: u32) -> (u32, u32) {
     }
 }
 
-/// Returns Some(WindowScaleMark) when (w, h) is recognisably 4:3.
+/// Returns Some(WindowScaleMark) when (w, h) exactly matches a windowed integer scale.
 pub fn window_scale_mark(w: u32, h: u32) -> Option<WindowScaleMark> {
     if w == 0 || h == 0 {
         return None;
@@ -55,9 +54,6 @@ pub fn window_scale_mark(w: u32, h: u32) -> Option<WindowScaleMark> {
         if (1..=4).contains(&n) {
             return Some(WindowScaleMark::Integer(n));
         }
-    }
-    if fit_aspect_size(w, h) == (w, h) {
-        return Some(WindowScaleMark::Fit);
     }
     None
 }
@@ -572,13 +568,12 @@ impl App {
                 }
                 Some(size) => {
                     let mark = window_scale_mark(size.width, size.height);
-                    let fit_checked = mark == Some(WindowScaleMark::Fit);
                     let int_n = match mark {
                         Some(WindowScaleMark::Integer(n)) => n,
                         _ => 0,
                     };
                     let int_checked = matches!(mark, Some(WindowScaleMark::Integer(_)));
-                    self.set_checked(&self.mi_fit, fit_checked);
+                    self.set_checked(&self.mi_fit, false);
                     self.set_checked(&self.mi_scale_1x, int_checked && int_n == 1);
                     self.set_checked(&self.mi_scale_2x, int_checked && int_n == 2);
                     self.set_checked(&self.mi_scale_3x, int_checked && int_n == 3);
@@ -638,8 +633,8 @@ mod tests {
     }
 
     #[test]
-    fn window_scale_mark_detects_fit_when_aspect_matches_but_not_integer_scale() {
-        assert_eq!(window_scale_mark(933, 700), Some(WindowScaleMark::Fit));
+    fn window_scale_mark_does_not_treat_fit_as_windowed_state() {
+        assert_eq!(window_scale_mark(933, 700), None);
     }
 
     #[test]

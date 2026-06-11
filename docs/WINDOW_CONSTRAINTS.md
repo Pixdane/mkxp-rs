@@ -122,12 +122,13 @@ off-ratio，`about_to_wait` 中的轻量检查会自动重试修正，无需等�
 
 ## Checkmark 同步
 
-窗口模式下，菜单勾选反映实际窗口尺寸，不反映历史点击：
+窗口模式下，`Fit` 是一次性命令，不是状态；整数倍菜单勾选反映实际窗口尺寸，
+不反映历史点击：
 
 - `Lock Aspect Ratio`：`aspect_locked == true` 时打勾。
-- `Fit`：窗口是 `4:3`，但不是 `1x`-`4x` 精确整数倍时打勾。
+- `Fit`：始终不打勾，即使刚执行过窗口 fit 或窗口当前正好是无黑边 `4:3`。
 - `1x`-`4x`：窗口实际尺寸正好等于 `640x480 * n` 时对应项打勾。
-- 窗口偏离 `4:3` 时，`Fit` 和 `1x`-`4x` 全部不勾。
+- 窗口不是 `1x`-`4x` 精确整数倍时，`1x`-`4x` 全部不勾。
 
 全屏模式下，菜单勾选反映 `fullscreen_scale_mode`：
 
@@ -177,9 +178,6 @@ window_scale_mark(w, h):
     if 1 <= n <= 4:
       return Integer(n)
 
-  if w * 480 == h * 640:
-    return Fit
-
   return None
 ```
 
@@ -206,7 +204,7 @@ request_single_resize(933, 700, Explicit)
 [Resized(933, 700)]
   pending_resize = None
   graphics.on_resize(933, 700)
-  refresh_menu_marks() -> Fit checked
+  refresh_menu_marks() -> no scale checked
 ```
 
 手动拖拽，`aspect_locked == true`：
