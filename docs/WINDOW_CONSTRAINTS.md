@@ -59,16 +59,18 @@ handle_resize(w, h):
   if pending_resize.target == (w, h):
     pending_resize = None
 
-  if aspect_locked:
+  decision = classify_resize(w, h)
+  if decision == NeedsCorrection:
     c = fit_aspect_size(w, h)
-    if c != (w, h):
-      request_single_resize(c)
-      refresh_menu_marks()
-      return
+    request_single_resize(c)   // may be suppressed by coalescing
 
-  graphics.on_resize(w, h)
+  graphics.on_resize(w, h)    // always called, even when off-ratio
   refresh_menu_marks()
 ```
+
+防抖期间如果 `request_single_resize` 被抑制，窗口会暂时留在 off-ratio 尺寸，
+但 graphics 层总是获取实际窗口大小，内容不会拉伸。
+`about_to_wait` 会在 pending 超时后自动重试修正。
 
 全屏模式下：
 
@@ -105,6 +107,9 @@ request_single_resize(size):
 拖拽期间持续发送用户输入尺寸；如果每个输入事件都清除 pending 并立即发新
 的 `request_inner_size`，窗口尺寸虽然会被纠正，但事件循环会被 resize 请求
 风暴压住，表现为拖拽卡死。
+
+Pending 防抖会暂时抑制重复修正请求。如果 pending 超时且窗口仍为 off-ratio，
+`about_to_wait` 中的轻量检查会自动重试修正，无需等待下一次用户拖拽事件。
 
 ## Checkmark 同步
 
@@ -199,11 +204,16 @@ request_single_resize(933, 700)
 
 ```text
 [Resized(1100, 800)]
-  fit_aspect_size(1100, 800) -> 1067x800
-  request_single_resize(1067, 800)
+  classify_resize -> NeedsCorrection
+  request_single_resize(1067, 800)   // 发送修正请求
+  graphics.on_resize(1100, 800)      // 图形层使用实际窗口尺寸
 
-[Resized(1067, 800)]
+[Resized(1067, 800)]（修正到账）
+  observe_resized -> pending 清除
+  classify_resize -> Proceed
   graphics.on_resize(1067, 800)
+
+若防抖期间修正被抑制，about_to_wait 在超时后自动重试。
 ```
 
 菜单 `3x`，全屏模式：

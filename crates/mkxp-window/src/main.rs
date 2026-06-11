@@ -21,6 +21,15 @@ const RESIZE_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
 // ── public API for tests ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeDecision {
+    /// Off-ratio and aspect-locked; correction was requested (or suppressed).
+    /// Caller must still update graphics for the actual size.
+    NeedsCorrection,
+    /// Proceed normally (on-ratio, fullscreen, or not aspect-locked).
+    Proceed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowScaleMark {
     Fit,
     Integer(u32),
@@ -283,6 +292,21 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.poll_menu_events(event_loop);
+
+        // Retry aspect-lock correction if window is still off-ratio and
+        // the pending resize request has timed out.
+        if self.aspect_locked
+            && !self.is_fullscreen()
+            && let Some(ref window) = self.window
+        {
+            let size = window.inner_size();
+            let c = fit_aspect_size(size.width, size.height);
+            if c != (size.width, size.height) {
+                self.request_single_resize(c);
+                self.refresh_menu_marks();
+            }
+        }
+
         let frame_start = Instant::now();
         let fps = if let Some(ref graphics) = self.graphics {
             let mut g = graphics.lock().unwrap();
@@ -360,17 +384,26 @@ impl App {
         }
     }
 
+    fn classify_resize(w: u32, h: u32, is_fullscreen: bool, aspect_locked: bool) -> ResizeDecision {
+        if is_fullscreen || !aspect_locked {
+            return ResizeDecision::Proceed;
+        }
+        let c = fit_aspect_size(w, h);
+        if c != (w, h) {
+            ResizeDecision::NeedsCorrection
+        } else {
+            ResizeDecision::Proceed
+        }
+    }
+
     fn handle_resize(&mut self, w: u32, h: u32) {
         let now = Instant::now();
         self.resize_requests.observe_resized((w, h), now);
 
-        if !self.is_fullscreen() && self.aspect_locked {
+        let decision = Self::classify_resize(w, h, self.is_fullscreen(), self.aspect_locked);
+        if decision == ResizeDecision::NeedsCorrection {
             let c = fit_aspect_size(w, h);
-            if c != (w, h) {
-                self.request_single_resize(c);
-                self.refresh_menu_marks();
-                return;
-            }
+            self.request_single_resize(c);
         }
 
         if let Some(ref graphics) = self.graphics {
@@ -622,5 +655,39 @@ mod tests {
 
         assert!(!tracker.can_request(start + RESIZE_REQUEST_TIMEOUT / 2));
         assert!(tracker.can_request(start + RESIZE_REQUEST_TIMEOUT + Duration::from_millis(1)));
+    }
+
+    // ResizeDecision tests
+
+    #[test]
+    fn classify_resize_needs_correction_when_aspect_locked_and_off_ratio() {
+        assert_eq!(
+            App::classify_resize(1100, 800, false, true),
+            ResizeDecision::NeedsCorrection
+        );
+    }
+
+    #[test]
+    fn classify_resize_proceeds_when_aspect_locked_and_on_ratio() {
+        assert_eq!(
+            App::classify_resize(1067, 800, false, true),
+            ResizeDecision::Proceed
+        );
+    }
+
+    #[test]
+    fn classify_resize_proceeds_when_not_aspect_locked() {
+        assert_eq!(
+            App::classify_resize(1100, 800, false, false),
+            ResizeDecision::Proceed
+        );
+    }
+
+    #[test]
+    fn classify_resize_proceeds_when_fullscreen() {
+        assert_eq!(
+            App::classify_resize(1100, 800, true, true),
+            ResizeDecision::Proceed
+        );
     }
 }
