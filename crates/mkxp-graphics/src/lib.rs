@@ -3,19 +3,29 @@
 //! 不依赖 winit。接收 [`wgpu::Surface`] 作为外部参数。
 //! 提供场景图、精灵、视口、位图、着色器、后处理。
 
-pub mod scene;
-pub mod element;
-pub mod texture;
-pub mod pipeline;
-pub mod geometry;
 pub mod context;
+pub mod element;
+pub mod geometry;
+pub mod pipeline;
 pub mod post;
+pub mod scene;
+pub mod texture;
 
 use tracing::{debug, error, info, instrument};
 use wgpu::{Device, Queue, Surface, SurfaceConfiguration};
 
 use geometry::Quad;
 use pipeline::PipelineSet;
+
+/// Viewport 缩放模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewportScaleMode {
+    /// 保持游戏宽高比，完整显示在窗口/全屏 surface 内，居中，可能有黑边。
+    Fit,
+    /// 使用 n 倍游戏分辨率作为 viewport 尺寸，居中，可能有黑边。
+    /// n=0 等价于 n=1。
+    Integer(u32),
+}
 
 /// 渲染层的顶层状态。
 ///
@@ -38,7 +48,10 @@ pub struct GraphicsState {
 
     /// 窗口内游戏画面的区域（保持宽高比、居中、其余黑色填充）。
     /// 每次 on_resize 时重新计算。
-    game_viewport: (u32, u32, u32, u32),  // (x, y, w, h)
+    game_viewport: (u32, u32, u32, u32), // (x, y, w, h)
+
+    /// 当前 viewport 缩放模式。
+    viewport_scale_mode: ViewportScaleMode,
 
     /// 预编译的 pipeline。
     pub pipelines: PipelineSet,
@@ -72,15 +85,19 @@ impl GraphicsState {
         surface.configure(&device, &surface_config);
 
         let game_size = (screen_width, screen_height);
-        let game_viewport = letterbox_viewport(
-            surface_config.width, surface_config.height, game_size.0, game_size.1,
+        let viewport_scale_mode = ViewportScaleMode::Fit;
+        let game_viewport = viewport_for_mode(
+            surface_config.width,
+            surface_config.height,
+            game_size.0,
+            game_size.1,
+            viewport_scale_mode,
         );
 
         let pipelines = PipelineSet::new(&device, surface_config.format);
         // 渲染坐标系始终以游戏分辨率为准
-        let (uniform_buffer, uniform_bind_group) = PipelineSet::create_uniform_bind_group(
-            &device, game_size.0, game_size.1,
-        );
+        let (uniform_buffer, uniform_bind_group) =
+            PipelineSet::create_uniform_bind_group(&device, game_size.0, game_size.1);
 
         // 初始位置：画面中央一个 200×150 的红色方块
         let win_w = surface_config.width;
@@ -89,7 +106,10 @@ impl GraphicsState {
         // 游戏画面背景：暗蓝色，填满整个游戏区域
         let bg_quad = Quad::new(
             &device,
-            0.0, 0.0, screen_width as f32, screen_height as f32,
+            0.0,
+            0.0,
+            screen_width as f32,
+            screen_height as f32,
             [0.05, 0.05, 0.15, 1.0],
         );
 
@@ -111,6 +131,7 @@ impl GraphicsState {
             game_size,
             target_fps,
             game_viewport,
+            viewport_scale_mode,
             bg_quad,
             pipelines,
             uniform_buffer,
@@ -142,11 +163,11 @@ impl GraphicsState {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("mkxp-frame"),
-            },
-        );
+            });
 
         {
             let (vpx, vpy, vpw, vph) = self.game_viewport;
@@ -196,11 +217,24 @@ impl GraphicsState {
         }
         debug!("surface resized");
         self.window_size = (width, height);
-        self.game_viewport = letterbox_viewport(width, height, self.game_size.0, self.game_size.1);
+        self.game_viewport = viewport_for_mode(
+            width,
+            height,
+            self.game_size.0,
+            self.game_size.1,
+            self.viewport_scale_mode,
+        );
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
         // 不更新 uniform——shader 始终以游戏分辨率为坐标系
+    }
+
+    /// 设置 viewport 缩放模式并立即重新计算 game_viewport。
+    pub fn set_viewport_scale_mode(&mut self, mode: ViewportScaleMode) {
+        self.viewport_scale_mode = mode;
+        let (w, h) = self.window_size;
+        self.game_viewport = viewport_for_mode(w, h, self.game_size.0, self.game_size.1, mode);
     }
 
     /// 移动测试四边形（临时 API，场景图就绪后删除）。
@@ -225,7 +259,12 @@ impl GraphicsState {
 ///
 /// 保持 `game_w:game_h` 宽高比不变，一个方向填满，另一个方向居中留黑边。
 /// 返回 `(x, y, w, h)` 像素坐标。
-fn letterbox_viewport(window_w: u32, window_h: u32, game_w: u32, game_h: u32) -> (u32, u32, u32, u32) {
+fn letterbox_viewport(
+    window_w: u32,
+    window_h: u32,
+    game_w: u32,
+    game_h: u32,
+) -> (u32, u32, u32, u32) {
     let window_ratio = window_w as f32 / window_h as f32;
     let game_ratio = game_w as f32 / game_h as f32;
 
@@ -249,6 +288,30 @@ fn letterbox_viewport(window_w: u32, window_h: u32, game_w: u32, game_h: u32) ->
 
 fn valid_surface_size(width: u32, height: u32) -> bool {
     width > 0 && height > 0
+}
+
+/// 根据缩放模式计算当前窗口/全屏 surface 内的游戏 viewport。
+///
+/// `Fit` 模式复用 `letterbox_viewport` 行为。
+/// `Integer(n)` 使用 `n.max(1) * game_size` 居中。
+pub fn viewport_for_mode(
+    window_w: u32,
+    window_h: u32,
+    game_w: u32,
+    game_h: u32,
+    mode: ViewportScaleMode,
+) -> (u32, u32, u32, u32) {
+    match mode {
+        ViewportScaleMode::Fit => letterbox_viewport(window_w, window_h, game_w, game_h),
+        ViewportScaleMode::Integer(n) => {
+            let scale = n.max(1);
+            let vpw = game_w * scale;
+            let vph = game_h * scale;
+            let x = window_w.saturating_sub(vpw) / 2;
+            let y = window_h.saturating_sub(vph) / 2;
+            (x, y, vpw, vph)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -279,9 +342,9 @@ mod tests {
     fn letterbox_window_wider() {
         // 窗口比游戏宽，左右留黑
         let (x, y, w, h) = letterbox_viewport(960, 480, 640, 480);
-        assert_eq!(h, 480);         // 高度填满
-        assert_eq!(w, 640);         // 宽度保持 4:3
-        assert_eq!(x, 160);         // 左边黑边
+        assert_eq!(h, 480); // 高度填满
+        assert_eq!(w, 640); // 宽度保持 4:3
+        assert_eq!(x, 160); // 左边黑边
         assert_eq!(y, 0);
     }
 
@@ -289,15 +352,33 @@ mod tests {
     fn letterbox_window_taller() {
         // 窗口比游戏高，上下留黑
         let (x, y, w, h) = letterbox_viewport(640, 640, 640, 480);
-        assert_eq!(w, 640);         // 宽度填满
-        assert_eq!(h, 480);         // 高度保持 4:3
+        assert_eq!(w, 640); // 宽度填满
+        assert_eq!(h, 480); // 高度保持 4:3
         assert_eq!(x, 0);
-        assert_eq!(y, 80);          // 上边黑边
+        assert_eq!(y, 80); // 上边黑边
     }
 
     #[test]
     fn letterbox_doubled() {
         let (x, y, w, h) = letterbox_viewport(1280, 960, 640, 480);
         assert_eq!((x, y, w, h), (0, 0, 1280, 960));
+    }
+
+    #[test]
+    fn viewport_fit_matches_letterbox() {
+        let viewport = viewport_for_mode(1920, 1080, 640, 480, ViewportScaleMode::Fit);
+        assert_eq!(viewport, (240, 0, 1440, 1080));
+    }
+
+    #[test]
+    fn viewport_integer_scale_is_centered() {
+        let viewport = viewport_for_mode(1920, 1080, 640, 480, ViewportScaleMode::Integer(2));
+        assert_eq!(viewport, (320, 60, 1280, 960));
+    }
+
+    #[test]
+    fn viewport_integer_scale_clamps_to_at_least_one() {
+        let viewport = viewport_for_mode(800, 600, 640, 480, ViewportScaleMode::Integer(0));
+        assert_eq!(viewport, (80, 60, 640, 480));
     }
 }
