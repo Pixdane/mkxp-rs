@@ -453,12 +453,32 @@ Runtime 再把命令分发给脚本、文件系统或 debug service。模块不�
 这个扩展应在实际出现第二个菜单贡献者时再做。当前先把窗口级菜单和快捷键
 收进 `WindowController`，保持实现小而明确。
 
+## 当前实现状态
+
+当前 `mkxp-window` 仍然是 binary crate。窗口控制边界已经落在
+`crates/mkxp-window/src/window_control.rs`：
+
+- `WindowController` 持有 `winit::Window`、`muda::Menu`、menu receiver、
+  menu items、modifier 状态、宽高比锁定状态、全屏 scale mode 和 resize
+  request tracker。
+- `WindowController` 不持有 `GraphicsState`，也不创建 wgpu resource。
+- `App` 负责 wgpu bootstrap、事件转发、`WindowOutput` 应用、graphics update
+  和 frame timing。
+- `WindowOutput::SurfaceResized` 使用真实窗口尺寸；自动宽高比修正仍是
+  controller 内部副作用。
+- `window_mode` 由 `window.fullscreen()` 的平台状态统一同步。Alt+Enter 和
+  macOS 原生全屏/退出全屏入口都收敛到同一套菜单勾选和 viewport 输出逻辑。
+- 纯策略测试随 `window_control.rs` 编译，覆盖 resize tracker、fit 计算、
+  windowed integer scale mark 和 resize 分类。
+
+尚未单独抽出 `WindowPolicy`/`WindowSideEffect`。当前实现先保留轻量 helper
+函数；等需要无窗口测试完整状态机转移时，再引入更明确的纯策略类型。
+
 ## 建议实施顺序
 
-1. 新增 `window_control.rs`，移动纯函数和状态类型。
-2. 抽出 `WindowPolicy`，让现有 resize/checkmark 测试先迁移到纯策略层。
-3. 新增 `WindowController`，持有 `Window`、`Menu`、receiver 和 menu items。
-4. 让 `App` 通过 `WindowOutput` 驱动 `GraphicsState`。
-5. 保留 wgpu bootstrap 在 `App` 中，通过 `controller.window()` 创建 surface。
-6. 更新 `WINDOW_CONSTRAINTS.md` 中的事件流名称，指向 `WindowController`。
-7. 后续再考虑 `RuntimeHost`、`RuntimeBuilder` 和菜单贡献系统。
+1. ✅ 新增 `window_control.rs`，移动纯函数和状态类型。
+2. ✅ 新增 `WindowController`，持有 `Window`、`Menu`、receiver 和 menu items。
+3. ✅ 让 `App` 通过 `WindowOutput` 驱动 `GraphicsState`。
+4. ✅ 保留 wgpu bootstrap 在 `App` 中，通过 `controller.window()` 创建 surface。
+5. 后续按需抽出 `WindowPolicy`/`WindowSideEffect`，覆盖更多无窗口状态机测试。
+6. 后续再考虑 `RuntimeHost`、`RuntimeBuilder` 和菜单贡献系统。

@@ -307,6 +307,9 @@ pub fn viewport_for_mode(
             let scale = n.max(1);
             let vpw = game_w * scale;
             let vph = game_h * scale;
+            if vpw > window_w || vph > window_h {
+                return letterbox_viewport(window_w, window_h, game_w, game_h);
+            }
             let x = window_w.saturating_sub(vpw) / 2;
             let y = window_h.saturating_sub(vph) / 2;
             (x, y, vpw, vph)
@@ -380,5 +383,11 @@ mod tests {
     fn viewport_integer_scale_clamps_to_at_least_one() {
         let viewport = viewport_for_mode(800, 600, 640, 480, ViewportScaleMode::Integer(0));
         assert_eq!(viewport, (80, 60, 640, 480));
+    }
+
+    #[test]
+    fn viewport_integer_scale_falls_back_to_fit_when_surface_is_too_small() {
+        let viewport = viewport_for_mode(2040, 1174, 640, 480, ViewportScaleMode::Integer(3));
+        assert_eq!(viewport, (237, 0, 1565, 1174));
     }
 }

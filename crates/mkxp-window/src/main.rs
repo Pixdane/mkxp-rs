@@ -1,112 +1,18 @@
+mod window_control;
+
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
-use winit::window::{Fullscreen, Window, WindowAttributes};
 
-use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use mkxp_graphics::GraphicsState;
 
-use mkxp_graphics::{GraphicsState, ViewportScaleMode};
+use crate::window_control::{GAME_H, GAME_W, WindowConfig, WindowController, WindowOutput};
 
 const DEFAULT_FPS: u32 = 60;
-const GAME_W: u32 = 640;
-const GAME_H: u32 = 480;
-const RESIZE_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
-
-// ── public API for tests ──
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResizeDecision {
-    /// Off-ratio and aspect-locked; correction was requested (or suppressed).
-    /// Caller must still update graphics for the actual size.
-    NeedsCorrection,
-    /// Proceed normally (on-ratio, fullscreen, or not aspect-locked).
-    Proceed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowScaleMark {
-    Integer(u32),
-}
-
-/// Compute the largest 4:3 inner size that fits within (w, h).
-pub fn fit_aspect_size(w: u32, h: u32) -> (u32, u32) {
-    if (w as u64) * 3 > (h as u64) * 4 {
-        (((h as f64 * 4.0 / 3.0).round()) as u32, h)
-    } else {
-        (w, ((w as f64 * 3.0 / 4.0).round()) as u32)
-    }
-}
-
-/// Returns Some(WindowScaleMark) when (w, h) exactly matches a windowed integer scale.
-pub fn window_scale_mark(w: u32, h: u32) -> Option<WindowScaleMark> {
-    if w == 0 || h == 0 {
-        return None;
-    }
-
-    if w.is_multiple_of(GAME_W) && h.is_multiple_of(GAME_H) && w / GAME_W == h / GAME_H {
-        let n = w / GAME_W;
-        if (1..=4).contains(&n) {
-            return Some(WindowScaleMark::Integer(n));
-        }
-    }
-    None
-}
-
-fn integer_size(n: u32) -> (u32, u32) {
-    (GAME_W * n, GAME_H * n)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PendingResize {
-    target: (u32, u32),
-    requested_at: Instant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResizeRequestMode {
-    Coalesced,
-    Explicit,
-}
-
-#[derive(Debug, Default)]
-struct ResizeRequestTracker {
-    pending: Option<PendingResize>,
-}
-
-impl ResizeRequestTracker {
-    fn can_request(&self, mode: ResizeRequestMode, now: Instant) -> bool {
-        match mode {
-            ResizeRequestMode::Explicit => true,
-            ResizeRequestMode::Coalesced => self
-                .pending
-                .map(|pending| now.duration_since(pending.requested_at) > RESIZE_REQUEST_TIMEOUT)
-                .unwrap_or(true),
-        }
-    }
-
-    fn mark_requested(&mut self, target: (u32, u32), now: Instant) {
-        self.pending = Some(PendingResize {
-            target,
-            requested_at: now,
-        });
-    }
-
-    fn observe_resized(&mut self, size: (u32, u32), _now: Instant) {
-        if self
-            .pending
-            .map(|pending| pending.target == size)
-            .unwrap_or(false)
-        {
-            self.pending = None;
-        }
-    }
-}
 
 fn main() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
@@ -115,59 +21,10 @@ fn main() {
         .expect("event loop error");
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FullscreenScaleMode {
-    Fit,
-    Integer(u32),
-}
-
-struct MenuItems {
-    fit: CheckMenuItem,
-    scale_1x: CheckMenuItem,
-    scale_2x: CheckMenuItem,
-    scale_3x: CheckMenuItem,
-    scale_4x: CheckMenuItem,
-    lock_aspect: CheckMenuItem,
-}
-
+#[derive(Default)]
 struct App {
-    window: Option<Window>,
     graphics: Option<Arc<Mutex<GraphicsState>>>,
-    _menu: Option<Menu>,
-    menu_receiver: Option<crossbeam_channel::Receiver<MenuEvent>>,
-
-    aspect_locked: bool,
-    resize_requests: ResizeRequestTracker,
-    fullscreen_scale_mode: FullscreenScaleMode,
-    modifiers: ModifiersState,
-
-    mi_fit: Option<CheckMenuItem>,
-    mi_scale_1x: Option<CheckMenuItem>,
-    mi_scale_2x: Option<CheckMenuItem>,
-    mi_scale_3x: Option<CheckMenuItem>,
-    mi_scale_4x: Option<CheckMenuItem>,
-    mi_lock_aspect: Option<CheckMenuItem>,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self {
-            window: None,
-            graphics: None,
-            _menu: None,
-            menu_receiver: None,
-            aspect_locked: false,
-            resize_requests: ResizeRequestTracker::default(),
-            fullscreen_scale_mode: FullscreenScaleMode::Fit,
-            modifiers: ModifiersState::default(),
-            mi_fit: None,
-            mi_scale_1x: None,
-            mi_scale_2x: None,
-            mi_scale_3x: None,
-            mi_scale_4x: None,
-            mi_lock_aspect: None,
-        }
-    }
+    window: Option<WindowController>,
 }
 
 impl ApplicationHandler for App {
@@ -176,14 +33,8 @@ impl ApplicationHandler for App {
             return;
         }
 
-        let window = event_loop
-            .create_window(
-                WindowAttributes::default()
-                    .with_title("mkxp-rs")
-                    .with_resizable(true)
-                    .with_inner_size(PhysicalSize::new(GAME_W, GAME_H)),
-            )
-            .expect("failed to create window");
+        let window = WindowController::new(event_loop, WindowConfig::default())
+            .expect("failed to create window controller");
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -193,7 +44,7 @@ impl ApplicationHandler for App {
         let surface: wgpu::Surface<'static> = unsafe {
             std::mem::transmute(
                 instance
-                    .create_surface(&window)
+                    .create_surface(window.window())
                     .expect("failed to create surface"),
             )
         };
@@ -241,14 +92,14 @@ impl ApplicationHandler for App {
             loop {
                 x += dx;
                 y += dy;
-                if x <= 0.0 || x + 200.0 >= 640.0 {
+                if x <= 0.0 || x + 200.0 >= GAME_W as f32 {
                     dx = -dx;
                 }
-                if y <= 0.0 || y + 150.0 >= 480.0 {
+                if y <= 0.0 || y + 150.0 >= GAME_H as f32 {
                     dy = -dy;
                 }
-                let r = (x / 640.0).clamp(0.0, 1.0);
-                let g = (y / 480.0).clamp(0.0, 1.0);
+                let r = (x / GAME_W as f32).clamp(0.0, 1.0);
+                let g = (y / GAME_H as f32).clamp(0.0, 1.0);
                 let b = 0.5;
                 gfx.lock()
                     .unwrap()
@@ -256,16 +107,6 @@ impl ApplicationHandler for App {
                 thread::sleep(Duration::from_millis(16));
             }
         });
-
-        let (menu, receiver, items) = Self::build_menu().expect("failed to create menu");
-        self._menu = Some(menu);
-        self.menu_receiver = Some(receiver);
-        self.mi_fit = Some(items.fit);
-        self.mi_scale_1x = Some(items.scale_1x);
-        self.mi_scale_2x = Some(items.scale_2x);
-        self.mi_scale_3x = Some(items.scale_3x);
-        self.mi_scale_4x = Some(items.scale_4x);
-        self.mi_lock_aspect = Some(items.lock_aspect);
 
         self.graphics = Some(graphics);
         self.window = Some(window);
@@ -277,44 +118,20 @@ impl ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => self.handle_resize(size.width, size.height),
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
-            }
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        physical_key: PhysicalKey::Code(key),
-                        state: ElementState::Pressed,
-                        ..
-                    },
-                ..
-            } => self.handle_key(key),
-            _ => {}
+        if let Some(window) = &mut self.window {
+            let outputs = window.on_window_event(event);
+            self.apply_window_outputs(event_loop, outputs);
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.poll_menu_events(event_loop);
-
-        // Retry aspect-lock correction if window is still off-ratio and
-        // the pending resize request has timed out.
-        if self.aspect_locked
-            && !self.is_fullscreen()
-            && let Some(ref window) = self.window
-        {
-            let size = window.inner_size();
-            let c = fit_aspect_size(size.width, size.height);
-            if c != (size.width, size.height) {
-                self.request_single_resize(c, ResizeRequestMode::Coalesced);
-                self.refresh_menu_marks();
-            }
+        if let Some(window) = &mut self.window {
+            let outputs = window.on_about_to_wait();
+            self.apply_window_outputs(event_loop, outputs);
         }
 
         let frame_start = Instant::now();
-        let fps = if let Some(ref graphics) = self.graphics {
+        let fps = if let Some(graphics) = &self.graphics {
             let mut g = graphics.lock().unwrap();
             let _ = g.update();
             g.target_fps()
@@ -327,427 +144,22 @@ impl ApplicationHandler for App {
     }
 }
 
-// ── private methods ──
-
 impl App {
-    fn build_menu() -> Result<(Menu, crossbeam_channel::Receiver<MenuEvent>, MenuItems), muda::Error>
-    {
-        let menu = Menu::new();
-
-        let fit = CheckMenuItem::with_id("fit", "Fit", true, false, None);
-        let scale_1x = CheckMenuItem::with_id("scale_1x", "1x (640\u{d7}480)", true, false, None);
-        let scale_2x = CheckMenuItem::with_id("scale_2x", "2x (1280\u{d7}960)", true, false, None);
-        let scale_3x = CheckMenuItem::with_id("scale_3x", "3x (1920\u{d7}1440)", true, false, None);
-        let scale_4x = CheckMenuItem::with_id("scale_4x", "4x (2560\u{d7}1920)", true, false, None);
-        let lock_aspect =
-            CheckMenuItem::with_id("lock_aspect", "Lock Aspect Ratio", true, false, None);
-
-        let view_menu = Submenu::new("View", true);
-        view_menu.append_items(&[&fit, &scale_1x, &scale_2x, &scale_3x, &scale_4x])?;
-        view_menu.append(&PredefinedMenuItem::separator())?;
-        view_menu.append_items(&[&lock_aspect])?;
-
-        let help_menu = Submenu::new("Help", true);
-        help_menu.append(&MenuItem::with_id("about", "About mkxp-rs", true, None))?;
-
-        menu.append(&view_menu)?;
-        menu.append(&help_menu)?;
-
-        let app_menu = Submenu::new("mkxp-rs", true);
-        app_menu.append(&PredefinedMenuItem::quit(None))?;
-        menu.insert(&app_menu, 0)?;
-
-        #[cfg(target_os = "macos")]
-        menu.init_for_nsapp();
-
-        Ok((
-            menu,
-            MenuEvent::receiver().clone(),
-            MenuItems {
-                fit,
-                scale_1x,
-                scale_2x,
-                scale_3x,
-                scale_4x,
-                lock_aspect,
-            },
-        ))
-    }
-
-    // ── resize ──
-
-    fn request_single_resize(&mut self, size: (u32, u32), mode: ResizeRequestMode) {
-        let now = Instant::now();
-        if !self.resize_requests.can_request(mode, now) {
-            return;
-        }
-        if let Some(ref window) = self.window
-            && window
-                .request_inner_size(PhysicalSize::new(size.0, size.1))
-                .is_none()
-        {
-            self.resize_requests.mark_requested(size, now);
-        }
-    }
-
-    fn classify_resize(w: u32, h: u32, is_fullscreen: bool, aspect_locked: bool) -> ResizeDecision {
-        if is_fullscreen || !aspect_locked {
-            return ResizeDecision::Proceed;
-        }
-        let c = fit_aspect_size(w, h);
-        if c != (w, h) {
-            ResizeDecision::NeedsCorrection
-        } else {
-            ResizeDecision::Proceed
-        }
-    }
-
-    fn should_request_windowed_fit_after_aspect_toggle(
-        aspect_locked: bool,
-        is_fullscreen: bool,
-    ) -> bool {
-        aspect_locked && !is_fullscreen
-    }
-
-    fn handle_resize(&mut self, w: u32, h: u32) {
-        let now = Instant::now();
-        self.resize_requests.observe_resized((w, h), now);
-
-        let decision = Self::classify_resize(w, h, self.is_fullscreen(), self.aspect_locked);
-        if decision == ResizeDecision::NeedsCorrection {
-            let c = fit_aspect_size(w, h);
-            self.request_single_resize(c, ResizeRequestMode::Coalesced);
-        }
-
-        if let Some(ref graphics) = self.graphics {
-            graphics.lock().unwrap().on_resize(w, h);
-        }
-        self.refresh_menu_marks();
-    }
-
-    // ── keyboard ──
-
-    fn handle_key(&mut self, key: KeyCode) {
-        if self.modifiers.alt_key() && key == KeyCode::Enter {
-            return self.toggle_fullscreen();
-        }
-
-        match key {
-            KeyCode::KeyA => {
-                self.aspect_locked = !self.aspect_locked;
-                if Self::should_request_windowed_fit_after_aspect_toggle(
-                    self.aspect_locked,
-                    self.is_fullscreen(),
-                ) {
-                    self.request_windowed_fit(ResizeRequestMode::Explicit);
-                }
-                self.refresh_menu_marks();
-            }
-            KeyCode::Digit0 | KeyCode::Numpad0 => {
-                self.aspect_locked = false;
-                self.fullscreen_scale_mode = FullscreenScaleMode::Fit;
-                if let Some(ref graphics) = self.graphics {
-                    graphics
-                        .lock()
-                        .unwrap()
-                        .set_viewport_scale_mode(ViewportScaleMode::Fit);
-                }
-                self.refresh_menu_marks();
-            }
-            _ => {}
-        }
-    }
-
-    // ── fullscreen toggle ──
-
-    fn toggle_fullscreen(&mut self) {
-        if let Some(ref window) = self.window {
-            if self.is_fullscreen() {
-                window.set_fullscreen(None);
-                self.set_graphics_viewport_mode(ViewportScaleMode::Fit);
-            } else {
-                window.set_fullscreen(Some(Fullscreen::Borderless(None)));
-                self.apply_fullscreen_scale_mode();
-            }
-            self.refresh_menu_marks();
-        }
-    }
-
-    // ── menu events ──
-
-    fn poll_menu_events(&mut self, event_loop: &ActiveEventLoop) {
-        let events: Vec<MenuEvent> = match &self.menu_receiver {
-            Some(r) => {
-                let mut v = Vec::new();
-                while let Ok(e) = r.try_recv() {
-                    v.push(e);
-                }
-                v
-            }
-            None => return,
-        };
-        for event in events {
-            match event.id.0.as_str() {
-                "fit" => self.menu_fit(),
-                "scale_1x" => self.menu_integer_scale(1),
-                "scale_2x" => self.menu_integer_scale(2),
-                "scale_3x" => self.menu_integer_scale(3),
-                "scale_4x" => self.menu_integer_scale(4),
-                "lock_aspect" => {
-                    self.aspect_locked = !self.aspect_locked;
-                    if Self::should_request_windowed_fit_after_aspect_toggle(
-                        self.aspect_locked,
-                        self.is_fullscreen(),
-                    ) {
-                        self.request_windowed_fit(ResizeRequestMode::Explicit);
+    fn apply_window_outputs(&mut self, event_loop: &ActiveEventLoop, outputs: Vec<WindowOutput>) {
+        for output in outputs {
+            match output {
+                WindowOutput::SurfaceResized { width, height } => {
+                    if let Some(graphics) = &self.graphics {
+                        graphics.lock().unwrap().on_resize(width, height);
                     }
-                    self.refresh_menu_marks();
                 }
-                "quit" => event_loop.exit(),
-                _ => {}
-            }
-        }
-    }
-
-    fn menu_fit(&mut self) {
-        if self.is_fullscreen() {
-            self.fullscreen_scale_mode = FullscreenScaleMode::Fit;
-            self.apply_fullscreen_scale_mode();
-        } else if let Some(ref window) = self.window {
-            let size = window.inner_size();
-            let c = fit_aspect_size(size.width, size.height);
-            if c != (size.width, size.height) {
-                self.request_single_resize(c, ResizeRequestMode::Explicit);
-            }
-        }
-        self.refresh_menu_marks();
-    }
-
-    fn menu_integer_scale(&mut self, n: u32) {
-        if self.is_fullscreen() {
-            self.fullscreen_scale_mode = FullscreenScaleMode::Integer(n);
-            self.apply_fullscreen_scale_mode();
-        } else {
-            self.request_single_resize(integer_size(n), ResizeRequestMode::Explicit);
-        }
-        self.refresh_menu_marks();
-    }
-
-    fn request_windowed_fit(&mut self, mode: ResizeRequestMode) {
-        if let Some(ref window) = self.window {
-            let size = window.inner_size();
-            let c = fit_aspect_size(size.width, size.height);
-            if c != (size.width, size.height) {
-                self.request_single_resize(c, mode);
-            }
-        }
-    }
-
-    // ── checkmark sync ──
-
-    fn refresh_menu_marks(&self) {
-        if self.is_fullscreen() {
-            let (fit_checked, int_n) = match self.fullscreen_scale_mode {
-                FullscreenScaleMode::Fit => (true, 0),
-                FullscreenScaleMode::Integer(n) => (false, n),
-            };
-            self.set_checked(&self.mi_fit, fit_checked);
-            self.set_checked(&self.mi_scale_1x, !fit_checked && int_n == 1);
-            self.set_checked(&self.mi_scale_2x, !fit_checked && int_n == 2);
-            self.set_checked(&self.mi_scale_3x, !fit_checked && int_n == 3);
-            self.set_checked(&self.mi_scale_4x, !fit_checked && int_n == 4);
-        } else {
-            let inner = self.window.as_ref().map(|w| w.inner_size());
-            match inner {
-                None => {
-                    self.set_checked(&self.mi_fit, false);
-                    self.set_checked(&self.mi_scale_1x, false);
-                    self.set_checked(&self.mi_scale_2x, false);
-                    self.set_checked(&self.mi_scale_3x, false);
-                    self.set_checked(&self.mi_scale_4x, false);
+                WindowOutput::ViewportScaleModeChanged(mode) => {
+                    if let Some(graphics) = &self.graphics {
+                        graphics.lock().unwrap().set_viewport_scale_mode(mode);
+                    }
                 }
-                Some(size) => {
-                    let mark = window_scale_mark(size.width, size.height);
-                    let int_n = match mark {
-                        Some(WindowScaleMark::Integer(n)) => n,
-                        _ => 0,
-                    };
-                    let int_checked = matches!(mark, Some(WindowScaleMark::Integer(_)));
-                    self.set_checked(&self.mi_fit, false);
-                    self.set_checked(&self.mi_scale_1x, int_checked && int_n == 1);
-                    self.set_checked(&self.mi_scale_2x, int_checked && int_n == 2);
-                    self.set_checked(&self.mi_scale_3x, int_checked && int_n == 3);
-                    self.set_checked(&self.mi_scale_4x, int_checked && int_n == 4);
-                }
+                WindowOutput::QuitRequested => event_loop.exit(),
             }
         }
-        self.set_checked(&self.mi_lock_aspect, self.aspect_locked);
-    }
-
-    fn is_fullscreen(&self) -> bool {
-        self.window.as_ref().and_then(Window::fullscreen).is_some()
-    }
-
-    fn apply_fullscreen_scale_mode(&self) {
-        match self.fullscreen_scale_mode {
-            FullscreenScaleMode::Fit => self.set_graphics_viewport_mode(ViewportScaleMode::Fit),
-            FullscreenScaleMode::Integer(n) => {
-                self.set_graphics_viewport_mode(ViewportScaleMode::Integer(n));
-            }
-        }
-    }
-
-    fn set_graphics_viewport_mode(&self, mode: ViewportScaleMode) {
-        if let Some(ref graphics) = self.graphics {
-            graphics.lock().unwrap().set_viewport_scale_mode(mode);
-        }
-    }
-
-    fn set_checked(&self, item: &Option<CheckMenuItem>, checked: bool) {
-        if let Some(item) = item {
-            item.set_checked(checked);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fit_aspect_size_shrinks_width_for_wide_window() {
-        assert_eq!(fit_aspect_size(1000, 700), (933, 700));
-    }
-
-    #[test]
-    fn fit_aspect_size_shrinks_height_for_tall_window() {
-        assert_eq!(fit_aspect_size(800, 700), (800, 600));
-    }
-
-    #[test]
-    fn window_scale_mark_detects_integer_scale() {
-        assert_eq!(
-            window_scale_mark(1280, 960),
-            Some(WindowScaleMark::Integer(2))
-        );
-    }
-
-    #[test]
-    fn window_scale_mark_does_not_treat_fit_as_windowed_state() {
-        assert_eq!(window_scale_mark(933, 700), None);
-    }
-
-    #[test]
-    fn window_scale_mark_clears_when_aspect_does_not_match() {
-        assert_eq!(window_scale_mark(1000, 700), None);
-    }
-
-    #[test]
-    fn window_scale_mark_ignores_zero_size() {
-        assert_eq!(window_scale_mark(0, 0), None);
-        assert_eq!(window_scale_mark(640, 0), None);
-        assert_eq!(window_scale_mark(0, 480), None);
-    }
-
-    #[test]
-    fn resize_request_tracker_blocks_repeated_requests_until_target_arrives() {
-        let start = Instant::now();
-        let mut tracker = ResizeRequestTracker::default();
-
-        assert!(tracker.can_request(ResizeRequestMode::Coalesced, start));
-        tracker.mark_requested((1067, 800), start);
-
-        tracker.observe_resized((1100, 800), start + Duration::from_millis(16));
-        assert!(!tracker.can_request(
-            ResizeRequestMode::Coalesced,
-            start + Duration::from_millis(16)
-        ));
-
-        tracker.observe_resized((1067, 800), start + Duration::from_millis(32));
-        assert!(tracker.can_request(
-            ResizeRequestMode::Coalesced,
-            start + Duration::from_millis(32)
-        ));
-    }
-
-    #[test]
-    fn resize_request_tracker_allows_retry_after_timeout() {
-        let start = Instant::now();
-        let mut tracker = ResizeRequestTracker::default();
-
-        tracker.mark_requested((1067, 800), start);
-
-        assert!(!tracker.can_request(
-            ResizeRequestMode::Coalesced,
-            start + RESIZE_REQUEST_TIMEOUT / 2
-        ));
-        assert!(tracker.can_request(
-            ResizeRequestMode::Coalesced,
-            start + RESIZE_REQUEST_TIMEOUT + Duration::from_millis(1)
-        ));
-    }
-
-    #[test]
-    fn resize_request_tracker_allows_explicit_request_while_coalesced_request_is_pending() {
-        let start = Instant::now();
-        let mut tracker = ResizeRequestTracker::default();
-
-        tracker.mark_requested((1067, 800), start);
-
-        assert!(!tracker.can_request(
-            ResizeRequestMode::Coalesced,
-            start + Duration::from_millis(16)
-        ));
-        assert!(tracker.can_request(
-            ResizeRequestMode::Explicit,
-            start + Duration::from_millis(16)
-        ));
-    }
-
-    // ResizeDecision tests
-
-    #[test]
-    fn classify_resize_needs_correction_when_aspect_locked_and_off_ratio() {
-        assert_eq!(
-            App::classify_resize(1100, 800, false, true),
-            ResizeDecision::NeedsCorrection
-        );
-    }
-
-    #[test]
-    fn classify_resize_proceeds_when_aspect_locked_and_on_ratio() {
-        assert_eq!(
-            App::classify_resize(1067, 800, false, true),
-            ResizeDecision::Proceed
-        );
-    }
-
-    #[test]
-    fn classify_resize_proceeds_when_not_aspect_locked() {
-        assert_eq!(
-            App::classify_resize(1100, 800, false, false),
-            ResizeDecision::Proceed
-        );
-    }
-
-    #[test]
-    fn classify_resize_proceeds_when_fullscreen() {
-        assert_eq!(
-            App::classify_resize(1100, 800, true, true),
-            ResizeDecision::Proceed
-        );
-    }
-
-    #[test]
-    fn aspect_toggle_requests_windowed_fit_only_when_locked_outside_fullscreen() {
-        assert!(App::should_request_windowed_fit_after_aspect_toggle(
-            true, false
-        ));
-        assert!(!App::should_request_windowed_fit_after_aspect_toggle(
-            true, true
-        ));
-        assert!(!App::should_request_windowed_fit_after_aspect_toggle(
-            false, false
-        ));
     }
 }

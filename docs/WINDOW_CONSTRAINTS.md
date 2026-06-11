@@ -148,7 +148,10 @@ enum ViewportScaleMode {
 ```
 
 - `Fit`：保持 `4:3`，在窗口或全屏 surface 内完整显示，居中，可能有黑边。
-- `Integer(n)`：使用 `n * 640` 和 `n * 480` 的 viewport，居中，可能有黑边。
+- `Integer(n)`：优先使用 `n * 640` 和 `n * 480` 的 viewport，居中，可能有黑边。
+  如果当前 surface 小于目标整数 viewport，则降级为 `Fit`，确保 viewport 始终
+  位于 render target 内。macOS 原生退出全屏动画期间可能先发较小的真实
+  surface resize，graphics 层必须避免生成超出 render target 的 viewport。
 
 窗口模式下的菜单 `Fit` 会先调整窗口本身到无黑边 `4:3` 尺寸，所以渲染层
 仍然可以使用 `Fit`。全屏模式下的菜单 `Fit` 不改变显示器尺寸，只改变
