@@ -72,16 +72,26 @@ struct PendingResize {
     requested_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResizeRequestMode {
+    Coalesced,
+    Explicit,
+}
+
 #[derive(Debug, Default)]
 struct ResizeRequestTracker {
     pending: Option<PendingResize>,
 }
 
 impl ResizeRequestTracker {
-    fn can_request(&self, now: Instant) -> bool {
-        self.pending
-            .map(|pending| now.duration_since(pending.requested_at) > RESIZE_REQUEST_TIMEOUT)
-            .unwrap_or(true)
+    fn can_request(&self, mode: ResizeRequestMode, now: Instant) -> bool {
+        match mode {
+            ResizeRequestMode::Explicit => true,
+            ResizeRequestMode::Coalesced => self
+                .pending
+                .map(|pending| now.duration_since(pending.requested_at) > RESIZE_REQUEST_TIMEOUT)
+                .unwrap_or(true),
+        }
     }
 
     fn mark_requested(&mut self, target: (u32, u32), now: Instant) {
@@ -302,7 +312,7 @@ impl ApplicationHandler for App {
             let size = window.inner_size();
             let c = fit_aspect_size(size.width, size.height);
             if c != (size.width, size.height) {
-                self.request_single_resize(c);
+                self.request_single_resize(c, ResizeRequestMode::Coalesced);
                 self.refresh_menu_marks();
             }
         }
@@ -370,9 +380,9 @@ impl App {
 
     // ── resize ──
 
-    fn request_single_resize(&mut self, size: (u32, u32)) {
+    fn request_single_resize(&mut self, size: (u32, u32), mode: ResizeRequestMode) {
         let now = Instant::now();
-        if !self.resize_requests.can_request(now) {
+        if !self.resize_requests.can_request(mode, now) {
             return;
         }
         if let Some(ref window) = self.window
@@ -396,6 +406,13 @@ impl App {
         }
     }
 
+    fn should_request_windowed_fit_after_aspect_toggle(
+        aspect_locked: bool,
+        is_fullscreen: bool,
+    ) -> bool {
+        aspect_locked && !is_fullscreen
+    }
+
     fn handle_resize(&mut self, w: u32, h: u32) {
         let now = Instant::now();
         self.resize_requests.observe_resized((w, h), now);
@@ -403,7 +420,7 @@ impl App {
         let decision = Self::classify_resize(w, h, self.is_fullscreen(), self.aspect_locked);
         if decision == ResizeDecision::NeedsCorrection {
             let c = fit_aspect_size(w, h);
-            self.request_single_resize(c);
+            self.request_single_resize(c, ResizeRequestMode::Coalesced);
         }
 
         if let Some(ref graphics) = self.graphics {
@@ -422,8 +439,11 @@ impl App {
         match key {
             KeyCode::KeyA => {
                 self.aspect_locked = !self.aspect_locked;
-                if self.aspect_locked {
-                    self.request_windowed_fit();
+                if Self::should_request_windowed_fit_after_aspect_toggle(
+                    self.aspect_locked,
+                    self.is_fullscreen(),
+                ) {
+                    self.request_windowed_fit(ResizeRequestMode::Explicit);
                 }
                 self.refresh_menu_marks();
             }
@@ -479,8 +499,11 @@ impl App {
                 "scale_4x" => self.menu_integer_scale(4),
                 "lock_aspect" => {
                     self.aspect_locked = !self.aspect_locked;
-                    if self.aspect_locked {
-                        self.request_windowed_fit();
+                    if Self::should_request_windowed_fit_after_aspect_toggle(
+                        self.aspect_locked,
+                        self.is_fullscreen(),
+                    ) {
+                        self.request_windowed_fit(ResizeRequestMode::Explicit);
                     }
                     self.refresh_menu_marks();
                 }
@@ -498,7 +521,7 @@ impl App {
             let size = window.inner_size();
             let c = fit_aspect_size(size.width, size.height);
             if c != (size.width, size.height) {
-                self.request_single_resize(c);
+                self.request_single_resize(c, ResizeRequestMode::Explicit);
             }
         }
         self.refresh_menu_marks();
@@ -509,17 +532,17 @@ impl App {
             self.fullscreen_scale_mode = FullscreenScaleMode::Integer(n);
             self.apply_fullscreen_scale_mode();
         } else {
-            self.request_single_resize(integer_size(n));
+            self.request_single_resize(integer_size(n), ResizeRequestMode::Explicit);
         }
         self.refresh_menu_marks();
     }
 
-    fn request_windowed_fit(&mut self) {
+    fn request_windowed_fit(&mut self, mode: ResizeRequestMode) {
         if let Some(ref window) = self.window {
             let size = window.inner_size();
             let c = fit_aspect_size(size.width, size.height);
             if c != (size.width, size.height) {
-                self.request_single_resize(c);
+                self.request_single_resize(c, mode);
             }
         }
     }
@@ -636,14 +659,20 @@ mod tests {
         let start = Instant::now();
         let mut tracker = ResizeRequestTracker::default();
 
-        assert!(tracker.can_request(start));
+        assert!(tracker.can_request(ResizeRequestMode::Coalesced, start));
         tracker.mark_requested((1067, 800), start);
 
         tracker.observe_resized((1100, 800), start + Duration::from_millis(16));
-        assert!(!tracker.can_request(start + Duration::from_millis(16)));
+        assert!(!tracker.can_request(
+            ResizeRequestMode::Coalesced,
+            start + Duration::from_millis(16)
+        ));
 
         tracker.observe_resized((1067, 800), start + Duration::from_millis(32));
-        assert!(tracker.can_request(start + Duration::from_millis(32)));
+        assert!(tracker.can_request(
+            ResizeRequestMode::Coalesced,
+            start + Duration::from_millis(32)
+        ));
     }
 
     #[test]
@@ -653,8 +682,31 @@ mod tests {
 
         tracker.mark_requested((1067, 800), start);
 
-        assert!(!tracker.can_request(start + RESIZE_REQUEST_TIMEOUT / 2));
-        assert!(tracker.can_request(start + RESIZE_REQUEST_TIMEOUT + Duration::from_millis(1)));
+        assert!(!tracker.can_request(
+            ResizeRequestMode::Coalesced,
+            start + RESIZE_REQUEST_TIMEOUT / 2
+        ));
+        assert!(tracker.can_request(
+            ResizeRequestMode::Coalesced,
+            start + RESIZE_REQUEST_TIMEOUT + Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn resize_request_tracker_allows_explicit_request_while_coalesced_request_is_pending() {
+        let start = Instant::now();
+        let mut tracker = ResizeRequestTracker::default();
+
+        tracker.mark_requested((1067, 800), start);
+
+        assert!(!tracker.can_request(
+            ResizeRequestMode::Coalesced,
+            start + Duration::from_millis(16)
+        ));
+        assert!(tracker.can_request(
+            ResizeRequestMode::Explicit,
+            start + Duration::from_millis(16)
+        ));
     }
 
     // ResizeDecision tests
@@ -689,5 +741,18 @@ mod tests {
             App::classify_resize(1100, 800, true, true),
             ResizeDecision::Proceed
         );
+    }
+
+    #[test]
+    fn aspect_toggle_requests_windowed_fit_only_when_locked_outside_fullscreen() {
+        assert!(App::should_request_windowed_fit_after_aspect_toggle(
+            true, false
+        ));
+        assert!(!App::should_request_windowed_fit_after_aspect_toggle(
+            true, true
+        ));
+        assert!(!App::should_request_windowed_fit_after_aspect_toggle(
+            false, false
+        ));
     }
 }

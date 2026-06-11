@@ -34,9 +34,9 @@ enum FullscreenScaleMode {
 
 | 操作 | 窗口模式 | 全屏模式 |
 |------|----------|----------|
-| `Lock Aspect Ratio` / A | 切换 `aspect_locked`，开启时立即把窗口修到 `4:3` | 状态可切换但不约束全屏窗口 |
-| `Fit` | 请求窗口调整到当前尺寸附近的无黑边 `4:3` 尺寸 | 设置 `FullscreenScaleMode::Fit` |
-| `1x`-`4x` | 请求窗口调整到 `640x480 * n` | 设置 `FullscreenScaleMode::Integer(n)` |
+| `Lock Aspect Ratio` / A | 切换 `aspect_locked`，开启时立即把窗口修到 `4:3` | 状态可切换，不请求 windowed fit，也不约束全屏窗口 |
+| `Fit` | 显式请求窗口调整到当前尺寸附近的无黑边 `4:3` 尺寸 | 设置 `FullscreenScaleMode::Fit` |
+| `1x`-`4x` | 显式请求窗口调整到 `640x480 * n` | 设置 `FullscreenScaleMode::Integer(n)` |
 | `0` | 关闭 `aspect_locked`，设置全屏显示模式为 `Fit` | 同左 |
 | Alt+Enter | 切换全屏 | 切回窗口 |
 
@@ -62,7 +62,7 @@ handle_resize(w, h):
   decision = classify_resize(w, h)
   if decision == NeedsCorrection:
     c = fit_aspect_size(w, h)
-    request_single_resize(c)   // may be suppressed by coalescing
+    request_single_resize(c, Coalesced)  // may be suppressed
 
   graphics.on_resize(w, h)    // always called, even when off-ratio
   refresh_menu_marks()
@@ -88,15 +88,22 @@ handle_resize(w, h):
 ## Resize 防抖
 
 macOS 在拖拽和程序化 resize 时会连续发送大量 `Resized` 事件。
-窗口层只允许同一时间有一个程序化 resize 请求在飞。这个请求只能在两种
-情况下解除：
+窗口层把程序化 resize 分为两类：
+
+- `Coalesced`：自动宽高比修正请求。用于 live resize 输入和
+  `about_to_wait` 重试，会被 pending 防抖抑制。
+- `Explicit`：用户显式命令。用于窗口模式下的 `Fit`、`1x`-`4x`，以及
+  在窗口模式开启 `Lock Aspect Ratio` 时的立即 fit。它可以覆盖正在等待的
+  `Coalesced` 请求，避免菜单命令被之前的自动修正吞掉。
+
+`pending_resize` 只能在两种情况下解除：
 
 - 收到目标尺寸的 `Resized(target_w, target_h)`。
 - 请求超过短超时（当前实现为 `100ms`），允许下一次修正覆盖旧目标。
 
 ```text
-request_single_resize(size):
-  if pending_resize exists and not timed out:
+request_single_resize(size, mode):
+  if mode == Coalesced and pending_resize exists and not timed out:
     return
 
   pending_resize = (size, now)
@@ -108,8 +115,10 @@ request_single_resize(size):
 的 `request_inner_size`，窗口尺寸虽然会被纠正，但事件循环会被 resize 请求
 风暴压住，表现为拖拽卡死。
 
-Pending 防抖会暂时抑制重复修正请求。如果 pending 超时且窗口仍为 off-ratio，
-`about_to_wait` 中的轻量检查会自动重试修正，无需等待下一次用户拖拽事件。
+Pending 防抖只暂时抑制重复的自动修正请求。如果 pending 超时且窗口仍为
+off-ratio，`about_to_wait` 中的轻量检查会自动重试修正，无需等待下一次
+用户拖拽事件。用户随后点击窗口模式 `Fit` 或 `1x`-`4x` 时，显式请求会
+替换旧 pending，立即请求目标尺寸。
 
 ## Checkmark 同步
 
@@ -179,7 +188,7 @@ window_scale_mark(w, h):
 菜单 `2x`，窗口模式：
 
 ```text
-request_single_resize(1280, 960)
+request_single_resize(1280, 960, Explicit)
 
 [Resized(1280, 960)]
   pending_resize = None
@@ -192,7 +201,7 @@ request_single_resize(1280, 960)
 ```text
 current = 1000x700
 fit_aspect_size(current) -> 933x700
-request_single_resize(933, 700)
+request_single_resize(933, 700, Explicit)
 
 [Resized(933, 700)]
   pending_resize = None
@@ -205,7 +214,7 @@ request_single_resize(933, 700)
 ```text
 [Resized(1100, 800)]
   classify_resize -> NeedsCorrection
-  request_single_resize(1067, 800)   // 发送修正请求
+  request_single_resize(1067, 800, Coalesced)  // 发送修正请求
   graphics.on_resize(1100, 800)      // 图形层使用实际窗口尺寸
 
 [Resized(1067, 800)]（修正到账）
