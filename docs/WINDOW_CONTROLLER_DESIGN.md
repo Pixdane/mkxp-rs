@@ -461,7 +461,12 @@ Runtime 再把命令分发给脚本、文件系统或 debug service。模块不�
   request tracker。
 - `WindowController` 不持有 `GraphicsState`，也不创建 wgpu resource。
 - `App` 负责 wgpu bootstrap、事件转发、`WindowOutput` 应用、graphics update
-  和 frame timing。
+  和 frame timing。当前 demo 逻辑已经按 `FRAME_LOOP_DESIGN.md` 的形状运行：
+  demo/script 线程修改 graphics 状态后在 `FrameSync` 同步点阻塞，winit 主线程
+  收到 `ScriptFrameReady` user event 后按 `target_fps` 节流渲染，渲染完成后再
+  唤醒它。
+- `App` 在退出时设置 shutdown、唤醒 demo/script 线程并 join，避免后台线程继续
+  持有 `GraphicsState` 到 `WindowController` drop 之后。
 - `WindowOutput::SurfaceResized` 使用真实窗口尺寸；自动宽高比修正仍是
   controller 内部副作用。
 - `window_mode` 由 `window.fullscreen()` 的平台状态统一同步。Alt+Enter 和

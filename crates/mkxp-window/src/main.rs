@@ -1,12 +1,15 @@
 mod window_control;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use std::{panic, panic::AssertUnwindSafe};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
 use mkxp_graphics::GraphicsState;
 
@@ -14,24 +17,115 @@ use crate::window_control::{GAME_H, GAME_W, WindowConfig, WindowController, Wind
 
 const DEFAULT_FPS: u32 = 60;
 
+#[derive(Debug, Clone, Copy)]
+enum RuntimeEvent {
+    ScriptFrameReady,
+}
+
+/// Synchronizes one script-produced frame with one winit-thread render.
+///
+/// The script side sets `ready = true` at the `Graphics.update` boundary and
+/// then blocks. The winit side renders exactly one frame, flips `ready` back to
+/// false, and wakes the script so the next game update can begin.
+#[derive(Default)]
+struct FrameSync {
+    ready: Mutex<bool>,
+    cv: std::sync::Condvar,
+}
+
+impl FrameSync {
+    fn script_frame_ready_and_wait(
+        &self,
+        shutdown: &AtomicBool,
+        wake_event_loop: impl FnOnce(),
+    ) -> bool {
+        let mut ready = self.ready.lock().unwrap();
+        *ready = true;
+        // A Condvar can wake the script thread, but it cannot wake winit's
+        // parked event loop on every platform. The caller also sends a winit
+        // user event so a ready frame is noticed even when there is no input.
+        wake_event_loop();
+        self.cv.notify_one();
+
+        while *ready && !shutdown.load(Ordering::Acquire) {
+            ready = self.cv.wait(ready).unwrap();
+        }
+
+        !shutdown.load(Ordering::Acquire)
+    }
+
+    fn is_ready(&self) -> bool {
+        *self.ready.lock().unwrap()
+    }
+
+    fn render_finished(&self) {
+        let mut ready = self.ready.lock().unwrap();
+        *ready = false;
+        self.cv.notify_one();
+    }
+
+    fn wake_all(&self) {
+        self.cv.notify_all();
+    }
+}
+
+struct SharedRuntime {
+    graphics: Mutex<GraphicsState>,
+    frame_sync: FrameSync,
+    script_failure: Mutex<Option<String>>,
+    shutdown: AtomicBool,
+}
+
+impl SharedRuntime {
+    fn record_script_panic(&self, payload: Box<dyn std::any::Any + Send>) {
+        *self.script_failure.lock().unwrap() = Some(panic_payload_to_string(payload));
+        self.shutdown.store(true, Ordering::Release);
+        // The main thread owns the event loop and user-visible failure path, so
+        // script panics are stored here and re-thrown from the next render tick.
+        self.frame_sync.wake_all();
+    }
+
+    fn take_script_failure(&self) -> Option<String> {
+        self.script_failure.lock().unwrap().take()
+    }
+}
+
 fn main() {
     mkxp_log::init(mkxp_log::LogConfig::default()).expect("failed to initialise logger");
 
-    let event_loop = EventLoop::new().expect("failed to create event loop");
+    let event_loop = EventLoop::<RuntimeEvent>::with_user_event()
+        .build()
+        .expect("failed to create event loop");
+    let proxy = event_loop.create_proxy();
     event_loop
-        .run_app(&mut App::default())
+        .run_app(&mut App::new(proxy))
         .expect("event loop error");
 }
 
-#[derive(Default)]
 struct App {
-    graphics: Option<Arc<Mutex<GraphicsState>>>,
+    event_loop_proxy: EventLoopProxy<RuntimeEvent>,
+    runtime: Option<Arc<SharedRuntime>>,
+    demo_thread: Option<JoinHandle<()>>,
     window: Option<WindowController>,
+    next_frame_at: Instant,
 }
 
-impl ApplicationHandler for App {
+impl App {
+    fn new(event_loop_proxy: EventLoopProxy<RuntimeEvent>) -> Self {
+        let now = Instant::now();
+        Self {
+            event_loop_proxy,
+            runtime: None,
+            demo_thread: None,
+            window: None,
+            next_frame_at: now,
+        }
+    }
+}
+
+impl ApplicationHandler<RuntimeEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.graphics.is_some() {
+        if self.runtime.is_some() {
             return;
         }
 
@@ -44,6 +138,9 @@ impl ApplicationHandler for App {
         });
 
         let surface: wgpu::Surface<'static> = unsafe {
+            // Safety: `GraphicsState` is dropped before `WindowController` in
+            // `shutdown`, so the surface never outlives the winit window it was
+            // created from. The widened lifetime only mirrors that ownership.
             std::mem::transmute(
                 instance
                     .create_surface(window.window())
@@ -66,52 +163,52 @@ impl ApplicationHandler for App {
             format: surface.get_capabilities(&adapter).formats[0],
             width: GAME_W,
             height: GAME_H,
-            #[cfg(target_os = "macos")]
-            present_mode: wgpu::PresentMode::Immediate,
-            #[cfg(not(target_os = "macos"))]
+            // Keep presentation synchronized by default. Immediate presentation
+            // looked responsive on macOS but can tear during integer-scaled
+            // fullscreen exits; config-driven vsync can be wired later.
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
 
-        let graphics = Arc::new(Mutex::new(GraphicsState::new(
-            device,
-            queue,
-            surface,
-            surface_config,
-            GAME_W,
-            GAME_H,
-            DEFAULT_FPS,
-        )));
+        let runtime = Arc::new(SharedRuntime {
+            graphics: Mutex::new(GraphicsState::new(
+                device,
+                queue,
+                surface,
+                surface_config,
+                GAME_W,
+                GAME_H,
+                DEFAULT_FPS,
+            )),
+            frame_sync: FrameSync::default(),
+            script_failure: Mutex::new(None),
+            shutdown: AtomicBool::new(false),
+        });
 
-        let gfx = graphics.clone();
-        thread::spawn(move || {
-            let mut x = 220.0_f32;
-            let mut y = 165.0_f32;
-            let mut dx = 2.0_f32;
-            let mut dy = 1.5_f32;
-            loop {
-                x += dx;
-                y += dy;
-                if x <= 0.0 || x + 200.0 >= GAME_W as f32 {
-                    dx = -dx;
-                }
-                if y <= 0.0 || y + 150.0 >= GAME_H as f32 {
-                    dy = -dy;
-                }
-                let r = (x / GAME_W as f32).clamp(0.0, 1.0);
-                let g = (y / GAME_H as f32).clamp(0.0, 1.0);
-                let b = 0.5;
-                gfx.lock()
-                    .unwrap()
-                    .set_test_quad(x, y, 200.0, 150.0, r, g, b);
-                thread::sleep(Duration::from_millis(16));
+        let demo_runtime = runtime.clone();
+        let demo_proxy = self.event_loop_proxy.clone();
+        let demo_thread = thread::spawn(move || {
+            let script_runtime = demo_runtime.clone();
+            let script_proxy = demo_proxy.clone();
+            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
+                run_demo_script(script_runtime, script_proxy);
+            })) {
+                demo_runtime.record_script_panic(payload);
+                // Wake winit even if it is sleeping until the next frame; the
+                // main thread should observe and report script failure promptly.
+                let _ = demo_proxy.send_event(RuntimeEvent::ScriptFrameReady);
             }
         });
 
-        self.graphics = Some(graphics);
+        self.runtime = Some(runtime);
+        self.demo_thread = Some(demo_thread);
         self.window = Some(window);
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.shutdown();
     }
 
     fn window_event(
@@ -126,42 +223,238 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::ScriptFrameReady => {
+                // The user event wakes the OS event loop; it does not override
+                // `target_fps`. `render_if_script_ready` still gates rendering
+                // with `next_frame_at`, keeping script timing stable.
+                self.render_if_script_ready();
+                self.schedule_next_wake(event_loop);
+            }
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(window) = &mut self.window {
             let outputs = window.on_about_to_wait();
             self.apply_window_outputs(event_loop, outputs);
         }
 
-        let frame_start = Instant::now();
-        let fps = if let Some(graphics) = &self.graphics {
-            let mut g = graphics.lock().unwrap();
-            let _ = g.update();
-            g.target_fps()
-        } else {
-            DEFAULT_FPS
-        };
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            (frame_start + Duration::from_nanos(1_000_000_000 / fps as u64)).max(Instant::now()),
-        ));
+        self.render_if_script_ready();
+        self.schedule_next_wake(event_loop);
     }
 }
 
 impl App {
+    fn current_fps(&self) -> u32 {
+        self.runtime
+            .as_ref()
+            .map(|runtime| runtime.graphics.lock().unwrap().target_fps())
+            .unwrap_or(DEFAULT_FPS)
+    }
+
+    fn frame_duration(&self) -> Duration {
+        Duration::from_nanos(1_000_000_000 / self.current_fps() as u64)
+    }
+
+    fn schedule_next_wake(&self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        let wake_at = if self.next_frame_at > now {
+            self.next_frame_at
+        } else {
+            now + self.frame_duration()
+        };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
+    }
+
+    fn render_if_script_ready(&mut self) {
+        if let Some(runtime) = &self.runtime {
+            if let Some(message) = runtime.take_script_failure() {
+                panic!("script thread panicked: {message}");
+            }
+
+            // A script frame can become ready before the scheduled frame time.
+            // Keep it blocked until the FPS gate opens instead of rendering
+            // early and accidentally speeding up the game loop.
+            if !runtime.frame_sync.is_ready() || Instant::now() < self.next_frame_at {
+                return;
+            }
+
+            let mut g = runtime.graphics.lock().unwrap();
+            let fps = g.target_fps();
+            let _ = g.update();
+            runtime.frame_sync.render_finished();
+            self.next_frame_at = Instant::now() + Duration::from_nanos(1_000_000_000 / fps as u64);
+        }
+    }
+
     fn apply_window_outputs(&mut self, event_loop: &ActiveEventLoop, outputs: Vec<WindowOutput>) {
         for output in outputs {
             match output {
                 WindowOutput::SurfaceResized { width, height } => {
-                    if let Some(graphics) = &self.graphics {
-                        graphics.lock().unwrap().on_resize(width, height);
+                    if let Some(runtime) = &self.runtime {
+                        runtime.graphics.lock().unwrap().on_resize(width, height);
                     }
                 }
                 WindowOutput::ViewportScaleModeChanged(mode) => {
-                    if let Some(graphics) = &self.graphics {
-                        graphics.lock().unwrap().set_viewport_scale_mode(mode);
+                    if let Some(runtime) = &self.runtime {
+                        runtime
+                            .graphics
+                            .lock()
+                            .unwrap()
+                            .set_viewport_scale_mode(mode);
                     }
                 }
                 WindowOutput::QuitRequested => event_loop.exit(),
             }
         }
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(runtime) = &self.runtime {
+            runtime.shutdown.store(true, Ordering::Release);
+            runtime.frame_sync.wake_all();
+        }
+
+        // Dropping a JoinHandle only detaches the thread. Join explicitly so the
+        // script cannot keep using `GraphicsState` while the window/surface are
+        // being torn down.
+        if let Some(handle) = self.demo_thread.take() {
+            let _ = handle.join();
+        }
+
+        self.runtime.take();
+        self.window.take();
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn run_demo_script(runtime: Arc<SharedRuntime>, proxy: EventLoopProxy<RuntimeEvent>) {
+    let mut x = 220.0_f32;
+    let mut y = 165.0_f32;
+    let mut dx = 2.0_f32;
+    let mut dy = 1.5_f32;
+
+    while !runtime.shutdown.load(Ordering::Acquire) {
+        x += dx;
+        y += dy;
+        if x <= 0.0 || x + 200.0 >= GAME_W as f32 {
+            dx = -dx;
+        }
+        if y <= 0.0 || y + 150.0 >= GAME_H as f32 {
+            dy = -dy;
+        }
+        let r = (x / GAME_W as f32).clamp(0.0, 1.0);
+        let g = (y / GAME_H as f32).clamp(0.0, 1.0);
+        let b = 0.5;
+
+        runtime
+            .graphics
+            .lock()
+            .unwrap()
+            .set_test_quad(x, y, 200.0, 150.0, r, g, b);
+
+        if !runtime
+            .frame_sync
+            .script_frame_ready_and_wait(&runtime.shutdown, || {
+                let _ = proxy.send_event(RuntimeEvent::ScriptFrameReady);
+            })
+        {
+            break;
+        }
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn frame_sync_blocks_script_until_render_finishes() {
+        let sync = Arc::new(FrameSync::default());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let script_sync = sync.clone();
+        let script_shutdown = shutdown.clone();
+        let handle = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let keep_running = script_sync.script_frame_ready_and_wait(&script_shutdown, || {
+                wake_tx.send(()).unwrap();
+            });
+            done_tx.send(keep_running).unwrap();
+        });
+
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        while !sync.is_ready() {
+            thread::yield_now();
+        }
+        assert!(done_rx.try_recv().is_err());
+
+        sync.render_finished();
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn frame_sync_shutdown_releases_blocked_script() {
+        let sync = Arc::new(FrameSync::default());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let script_sync = sync.clone();
+        let script_shutdown = shutdown.clone();
+        let handle = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let keep_running = script_sync.script_frame_ready_and_wait(&script_shutdown, || {
+                wake_tx.send(()).unwrap();
+            });
+            done_tx.send(keep_running).unwrap();
+        });
+
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        while !sync.is_ready() {
+            thread::yield_now();
+        }
+
+        shutdown.store(true, Ordering::Release);
+        sync.wake_all();
+        assert!(!done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn panic_payload_to_string_preserves_string_messages() {
+        assert_eq!(
+            panic_payload_to_string(Box::new("boom")),
+            "boom".to_string()
+        );
+        assert_eq!(
+            panic_payload_to_string(Box::new("kaboom".to_string())),
+            "kaboom".to_string()
+        );
     }
 }
