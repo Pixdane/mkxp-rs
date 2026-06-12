@@ -1177,54 +1177,30 @@ Ruby 绑定层                 winit 事件循环
        SceneGraph, DrawContext, PipelineSet, TexPool, PostProcess, ...
 
 
-## binary crate：事件循环集成
+## window host：事件循环集成
 
-这是 binary crate 的 `main.rs`。它拥有所有子系统的实例，
-在事件循环中协调它们。`mkxp-graphics` 是被调用者，不知道事件循环的存在。
+当前窗口入口由 `mkxp-window` 的 library entry 负责：binary `main.rs` 只调用
+`mkxp_window::run_demo()`。`mkxp-graphics` 仍然是被调用者，不知道 winit 事件循环
+或脚本引擎的存在。
 
 ```rust
-// binary crate 的 main.rs
-fn main() {
-    // 加载配置
-    let config = mkxp_config::load()?;
-
-    // 初始化日志
-    mkxp_log::init((&config).into())?;
-
-    // 挂载文件系统
-    let mut fs = mkxp_fs::FileSystem::new(&config);
-
-    // 初始化音频
-    let audio = mkxp_audio::AudioManager::new(&config)?;
-
-    // ── 创建 winit 窗口（只有 binary crate 依赖 winit）──
-    let event_loop = winit::event_loop::EventLoop::new()?;
-    let window = GameWindow::new(&event_loop, &config.game_title, 640, 480);
-
-    // ── 初始化 wgpu（只有 binary crate 做这件事）──
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-    let surface = window.create_surface(&instance);
-    let adapter = pollster::block_on(instance.request_adapter(/* ... */))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(/* ... */))?;
-    let surface_config = /* 配置 surface 格式和尺寸 */;
-
-    // ── 创建渲染层，传入 GPU 资源（mkxp-graphics 开始介入）──
-    let mut graphics = GraphicsState::new(
-        device, queue, surface, surface_config, &config,
-    );
-
-    // ── 事件循环：binary crate 是唯一的协调者 ──
-    event_loop.run_app(&mut app)?;
+fn main() -> anyhow::Result<()> {
+    mkxp_window::run_demo()
 }
 ```
 
-binary crate 做的事情 `mkxp-graphics` 一概不知：
+`run_demo()` / `App<E>` 做的事情 `mkxp-graphics` 一概不知：
+
 - winit 窗口和事件循环
 - wgpu Instance/Adapter/Device 初始化
 - 选择 GPU 后端（Vulkan/Metal/DX12）
-- 协调音频、输入、文件系统
+- 把 `WindowOutput` 转换成 `RenderCommand`
 - 脚本线程和 `Graphics.update` 的 `FrameSync` 调度
 - render host、FPS gate、render command queue 和 present mode 选择
+
+`GraphicsState` 位于 `SharedRuntime` 的 mutex 后面。script thread 在
+`Graphics.update` 前修改脚本可见的图形状态；render thread 在 frame ready 后应用
+resize/viewport command 并调用 `GraphicsState::update()` present 当前帧。
 
 ---
 

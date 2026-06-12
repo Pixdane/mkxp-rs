@@ -35,7 +35,7 @@ pub(crate) struct FrameSync {
 impl FrameSync {
     /// Called from the script thread to signal that a frame is ready.
     ///
-    /// Sets `ready = true`, records the instant, wakes the event loop via
+    /// Sets `ready = true`, records the instant, wakes the render waiter via
     /// the internal Condvar, then blocks until the render side calls
     /// `render_finished()` or shutdown is requested.
     ///

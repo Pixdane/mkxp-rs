@@ -1,3 +1,9 @@
+//! Error and exit types for the window runtime.
+//!
+//! Host threads cannot return errors directly through winit callbacks, so script
+//! and render outcomes are recorded in `SharedRuntime` and reported back to
+//! `App` through `RuntimeEvent`.
+
 use mkxp_types::MkxpError;
 
 use crate::render_host::RenderError;
@@ -5,10 +11,12 @@ use crate::window_control::WindowControllerError;
 
 // ── Main result alias ──
 
+/// Result produced by a script engine run.
 pub(crate) type ScriptRunResult = Result<ScriptExit, ScriptError>;
 
 // ── Error types ──
 
+/// Fatal errors surfaced by the window crate entry point.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum WindowError {
     #[error(transparent)]
@@ -27,13 +35,18 @@ pub(crate) enum WindowError {
     Mkxp(#[from] MkxpError),
 }
 
+/// Non-error reasons a script engine can stop running.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ScriptExit {
+    /// The script reached its natural end.
     Finished,
+    /// The runtime requested shutdown.
     ShutdownRequested,
+    /// The runtime requested a script restart; the window/render hosts stay alive.
     RestartRequested,
 }
 
+/// Errors produced by a script engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ScriptError {
     #[allow(

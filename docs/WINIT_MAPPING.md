@@ -1,353 +1,200 @@
-# winit 所需做的事情：对照 mkxp-z 源码，按调用顺序
+# winit 对照 mkxp-z：迁移参考
 
-本文对照 mkxp-z 的 `main.cpp` 和 `eventthread.cpp`，列出 winit
-二进制入口要做的所有事情，从启动到退出的完整调用序列。
+本文是 mkxp-z/SDL 到 winit/wgpu 的迁移对照表，不是当前架构规范。当前窗口架构以
+[`WINDOW_CONTROLLER_DESIGN.md`](WINDOW_CONTROLLER_DESIGN.md)、
+[`WINDOW_CONSTRAINTS.md`](WINDOW_CONSTRAINTS.md) 和
+[`FRAME_LOOP_DESIGN.md`](FRAME_LOOP_DESIGN.md) 为准。
 
----
+## 定位
 
-## 第一阶段：启动（main 函数，winit 事件循环之前）
+mkxp-z 使用 SDL event thread、SDL user event、OpenGL context 和 Ruby thread。
+mkxp-rs 当前使用：
 
-### 1. 配置和平台初始化
+- winit main thread：窗口、菜单、平台 UI、winit lifecycle。
+- render thread：frame timing、`wgpu::Surface` present、`GraphicsState::update()`。
+- script thread：`ScriptEngine`、script-facing graphics mutation、
+  `Graphics.update` 阻塞语义。
+- `WindowController`：窗口策略和菜单命令。
+- `SharedRuntime`：graphics、frame sync、runtime control、outcome slots。
 
-| mkxp-z（main.cpp） | winit/Rust 等价 |
+## 启动阶段
+
+| mkxp-z | mkxp-rs / winit |
 |---|---|
-| `SDL_SetHint(...)` (4 条 hint) | 不需要。winit 有自己的默认行为 |
-| `SDL_Init(VIDEO\|GAMECONTROLLER\|TIMER)` | `EventLoop::new()` — winit 自动初始化 |
-| `EventThread::allocUserEvents()` | 不需要。winit 没有自定义事件机制，改用共享状态 |
-| 设置当前目录 | `set_current_dir(game_path)` |
-| `Config::read(argc, argv)` | `mkxp_config::load()` → 直接用现成的 crate |
-| `IMG_Init(PNG\|JPG)` | 不需要。`image` crate 解码，不依赖 SDL_image |
-| `TTF_Init()` | 不需要。字体渲染用 `rusttype` 或 `ab_glyph`，不依赖 SDL_ttf |
-| `Sound_Init()` | 不需要。音频用 `mkxp-audio` crate，不依赖 SDL_sound |
-| [Windows] 调试控制台 | 开发阶段不需要，分发版本用 Windows 子系统 |
+| `Config::read(argc, argv)` | `mkxp_config::load()` -> `RuntimeConfig` |
+| `SDL_Init(VIDEO|GAMECONTROLLER|TIMER)` | `EventLoop::new()`；winit 负责平台初始化 |
+| `SDL_CreateWindow(...)` | `WindowController::new(...)` 创建 winit window 和平台菜单 |
+| `initGL(win, conf)` | wgpu `Instance -> Surface -> Adapter -> Device + Queue` |
+| `SDL_GL_GetDrawableSize` | wgpu surface configuration 使用 physical size |
+| `alcOpenDevice` | 未来接 `mkxp-audio`，不属于窗口层 |
+| `SDL_CreateThread(rgssThreadFun)` | `spawn_script_thread(E::default(), ...)` |
+| `eventThread.process(rtData)` | `event_loop.run_app(&mut App<E>)` |
 
-### 2. 创建窗口
+wgpu surface 从 `WindowController::window()` 创建，但 `WindowController` 不持有
+wgpu 资源。`GraphicsState` 放在 `SharedRuntime` 中，并由 render thread 使用。
 
-| mkxp-z | winit |
-|---|---|
-| `SDL_CreateWindow(title, x, y, w, h, flags)` | Builder 模式创建 winit Window |
-| `SDL_WINDOW_OPENGL` | 不需要。wgpu 自己管理 GPU 上下文 |
-| `SDL_WINDOW_INPUT_FOCUS` | winit 默认 |
-| `SDL_WINDOW_ALLOW_HIGHDPI` | winit 默认处理 DPI |
-| `SDL_WINDOW_RESIZABLE` | `Window::with_resizable(true)` |
-| `SDL_WINDOW_FULLSCREEN_DESKTOP` | `Window::set_fullscreen(Some(Fullscreen::Borderless(None)))` |
-| `setupWindowIcon(win)` (Linux) | `Window::set_window_icon(icon)` |
+## 窗口事件
 
-然后从 winit 窗口创建 wgpu surface：
+### Resize
 
-```rust
-let surface = instance.create_surface(window.clone())?;
-```
+mkxp-z：
 
-### 3. 创建 wgpu 设备（替代 OpenGL 上下文）
-
-| mkxp-z | wgpu |
-|---|---|
-| `initGL(win, conf)` | 创建 `wgpu::Instance` → `request_adapter()` → `request_device()` |
-| `SDL_GL_CreateContext` | wgpu 内部处理 |
-| `SDL_GL_MakeCurrent` | wgpu 内部处理 |
-| `glGetString(GL_VENDOR/RENDERER/...)` | `adapter.get_info()` — 打印 GPU 信息 |
-| 读取 `SDL_GL_GetDrawableSize` | `surface.get_current_texture()` 时自动得到 |
-
-### 4. 查询显示信息
-
-| mkxp-z | winit |
-|---|---|
-| `SDL_GetCurrentDisplayMode(0, &mode)` | `window.current_monitor().and_then(|m| m.refresh_rate_millihertz())` |
-| 用 `mode.refresh_rate` 做垂直同步 | `PresentMode::Fifo`（默认 = vsync） |
-
-### 5. 音频设备
-
-| mkxp-z | mkxp-rs |
-|---|---|
-| `alcOpenDevice(0)` → `alcCreateContext` | `mkxp_audio::AudioManager::new()` — 已实现 |
-
-### 6. 读取初始窗口尺寸
-
-| mkxp-z | winit |
-|---|---|
-| `SDL_GetWindowSize(win, &w, &h)` | `window.inner_size()` — 直接读 |
-| 通过 `windowSizeMsg.post()` 发给 RGSS 线程 | 不需要发消息。存在 `Shared` 里双方都能读 |
-
-### 7. 启动 Ruby 线程
-
-| mkxp-z | mkxp-rs |
-|---|---|
-| `SDL_CreateThread(rgssThreadFun)` | `std::thread::spawn(move \|\| { ruby_thread(...) })` |
-| RGSS 线程内：`SharedState::initInstance()` | Ruby 线程内：初始化 magnus，加载脚本 |
-| 然后 `eventThread.process(rtData)` | 然后 `event_loop.run(...)`（进入第二阶段） |
-
----
-
-## 第二阶段：事件循环
-
-mkxp-z 用 `while(true) { SDL_WaitEvent(&event); }` 阻塞等事件。
-winit 用 `event_loop.run(move |event, elwt| { ... })` 推送事件。
-
-### 8. 窗口事件
-
-#### 8a. 窗口大小改变
-
-**mkxp-z:**
 ```cpp
 case SDL_WINDOWEVENT_SIZE_CHANGED:
-    winW = event.window.data1;
-    winH = event.window.data2;
     SDL_GL_GetDrawableSize(win, &drwW, &drwH);
     windowSizeMsg.post(Vec2i(winW, winH));
     drawableSizeMsg.post(Vec2i(drwW, drwH));
 ```
 
-**winit:**
-```rust
-WindowEvent::Resized(physical_size) => {
-    graphics.on_resize(physical_size.width, physical_size.height);
-    // 不需要分别通知逻辑尺寸和物理像素——wgpu 的 surface config 处理
-}
+mkxp-rs 当前路径：
+
+```text
+WindowEvent::Resized
+  -> WindowController::on_window_event
+  -> WindowOutput::SurfaceResized { actual width, actual height }
+  -> App translates to RenderCommand::SurfaceResized
+  -> render thread applies GraphicsState::on_resize
 ```
 
-#### 8b. 鼠标进入/离开窗口
+注意：窗口约束修正可以在 controller 内触发 `request_inner_size`，但输出给 render
+层的尺寸始终是真实 window inner size。
 
-**mkxp-z:**
-```cpp
-case SDL_WINDOWEVENT_ENTER:
-    cursorInWindow = true;
-    mouseState.inWindow = true;
-```
+### Close
 
-**winit:**
-```rust
-WindowEvent::CursorEntered { .. } => input.mouse_in_window.store(true, Relaxed);
-WindowEvent::CursorLeft { .. } => input.mouse_in_window.store(false, Relaxed);
-```
+mkxp-z：
 
-#### 8c. 关闭窗口
-
-**mkxp-z:**
 ```cpp
 case SDL_WINDOWEVENT_CLOSE:
     terminate = true;
 ```
 
-**winit:**
-```rust
-WindowEvent::CloseRequested => elwt.exit();
+mkxp-rs：
+
+```text
+WindowEvent::CloseRequested
+  -> WindowOutput::QuitRequested
+  -> App::initiate_shutdown()
+  -> event_loop.exit()
 ```
 
-#### 8d. 焦点获取/失去
+### Focus 和输入
 
-**mkxp-z:**
+mkxp-z 在 focus lost 时清空输入状态，避免卡键。mkxp-rs 未来接 input service 时应
+保留同样语义：
+
+```text
+WindowEvent::Focused(false)
+  -> input.reset_all()
+```
+
+当前窗口层只消费窗口级快捷键；普通游戏输入仍是后续 input service 范围。
+
+## 键盘和菜单命令
+
+mkxp-z：
+
 ```cpp
-case SDL_WINDOWEVENT_FOCUS_LOST:
-    windowFocused = false;
-    resetInputStates();  // 清空所有按键状态，防止卡键
+if (Alt+Enter) toggleFullscreen();
+if (F12) rqReset.set();
 ```
 
-**winit:**
-```rust
-WindowEvent::Focused(false) => input.reset_all();
-WindowEvent::Focused(true) => { /* 更新光标 */ }
+mkxp-rs：
+
+```text
+Alt+Enter
+  -> WindowController toggles fullscreen
+
+F12 / Game > Restart
+  -> WindowOutput::RestartRequested
+  -> App requests runtime restart
+
+Game > Quit / CloseRequested
+  -> WindowOutput::QuitRequested
 ```
 
-### 9. 键盘事件
+reset 可以通过配置关闭；关闭后 F12 和菜单 restart 不应产生 restart 输出。
 
-**mkxp-z:**
-```cpp
-case SDL_KEYDOWN:
-    if (Alt+Enter) toggleFullscreen();
-    if (F1) openSettings();
-    if (F2) toggleFPS();
-    if (F12) { resetting = true; rqReset.set(); }
-    keyStates[scancode] = true;
+## SDL User Event 对照
 
-case SDL_KEYUP:
-    if (F12) { resetting = false; rqResetFinish.set(); }
-    keyStates[scancode] = false;
-```
+mkxp-z 中 Ruby thread 通过 `SDL_PushEvent()` 请求窗口操作。winit 侧不能让非主线程
+直接操作 window；窗口平台操作仍必须回到 winit main thread。
 
-**winit:**
-```rust
-WindowEvent::KeyboardInput {
-    event: KeyEvent { physical_key, state, .. }, ..
-} => {
-    let pressed = state.is_pressed();
+当前已实现的路径：
 
-    // 特殊按键——直接在 winit 线程处理
-    if pressed {
-        match physical_key {
-            KeyCode::F12 => outputs.push(WindowOutput::RestartRequested),
-            KeyCode::F2  => fps_display_toggle(),
-            _ => {}
-        }
-    }
-
-    // 普通按键——写入共享数组给 Ruby 读
-    input.keys[scancode].store(pressed, Relaxed);
-}
-```
-
-> Alt+Enter 全屏切换：winit 不直接支持。需手动检测
-> `Modifiers::ALT` + `KeyCode::Enter`，然后调
-> `window.set_fullscreen(Some/None)`。
-
-### 10. 鼠标事件
-
-**mkxp-z:**
-```cpp
-case SDL_MOUSEBUTTONDOWN: mouseState.buttons[button] = true;
-case SDL_MOUSEBUTTONUP:   mouseState.buttons[button] = false;
-case SDL_MOUSEMOTION:     mouseState.x = x; mouseState.y = y;
-case SDL_MOUSEWHEEL:      SDL_AtomicAdd(&verticalScrollDistance, y);
-```
-
-**winit:**
-```rust
-WindowEvent::MouseInput { button, state, .. } => {
-    input.mouse_buttons[btn].store(state.is_pressed(), Relaxed);
-}
-WindowEvent::CursorMoved { position, .. } => {
-    input.mouse_x.store(position.x as i32, Relaxed);
-    input.mouse_y.store(position.y as i32, Relaxed);
-}
-WindowEvent::MouseWheel { delta, .. } => {
-    // delta: LineDelta(x, y) 或 PixelDelta
-    input.scroll_y.fetch_add(lines as i32, Relaxed);
-}
-```
-
-### 11. 手柄事件
-
-**mkxp-z:** `SDL_GameController` API
-
-**winit:** winit 0.30 不内置。用 `gilrs` crate：
-
-```rust
-// 在 AboutToWait 或单独轮询
-while let Some(ev) = gilrs.next_event() {
-    match ev.event {
-        EventType::ButtonPressed(btn, _) => input.ctrl.buttons[btn] = true,
-        EventType::ButtonReleased(btn, _) => input.ctrl.buttons[btn] = false,
-        EventType::AxisChanged(axis, val, _) => input.ctrl.axes[axis] = val,
-        _ => {}
-    }
-}
-```
-
-### 12. 触摸事件
-
-**mkxp-z:** `SDL_FINGERDOWN/MOTION/UP`
-
-**winit:**
-```rust
-WindowEvent::Touch(Touch { phase, location, id, .. }) => {
-    match phase {
-        TouchPhase::Started => input.touch[id].down = true,
-        TouchPhase::Moved => {
-            input.touch[id].x = location.x;
-            input.touch[id].y = location.y;
-        }
-        TouchPhase::Ended | TouchPhase::Cancelled => input.touch[id].reset(),
-    }
-}
-```
-
-v1 无需实现（桌面 RPG Maker 几乎不需要触摸），保留骨架即可。
-
-### 13. 窗口操作请求（替代 mkxp-z 的 SDL 用户事件）
-
-mkxp-z 中 Ruby 线程通过 `SDL_PushEvent()` 发用户事件给主线程
-来触发窗口操作。winit 里全是**直接函数调用**，不需要事件中转：
-
-| mkxp-z 用户事件 | 谁发的 | winit 等价 |
-|---|---|---|
-| `REQUEST_SETFULLSCREEN` | `Graphics.fullscreen = true` | `window.set_fullscreen(Some(mode))` |
-| `REQUEST_WINRESIZE` | `Graphics.resize_screen(w,h)` | `window.request_inner_size(size)` |
-| `REQUEST_WINREPOSITION` | 移动窗口 | `window.set_outer_position(pos)` |
-| `REQUEST_WINCENTER` | `Graphics.center` | 计算屏幕中心 + `set_outer_position` |
-| `REQUEST_WINRENAME` | 改标题 | `window.set_title(title)` |
-| `REQUEST_SETCURSORVISIBLE` | `Graphics.show_cursor =` | `window.set_cursor_visible(show)` |
-| `REQUEST_MESSAGEBOX` | `msgbox("text")` | `rfd::MessageDialog` 或自定义 |
-| `UPDATE_FPS` | 每帧 | `window.set_title(&format!(...))` |
-| `UPDATE_SCREEN_RECT` | 游戏区域改变 | 不需要 |
-
-### 14. 帧渲染
-
-| mkxp-z | mkxp-rs 目标设计 |
+| mkxp-z 概念 | mkxp-rs 当前路径 |
 |---|---|
-| RGSS 线程调 `Graphics::update()` | script thread 在 `FrameSync` 设置 ready 并阻塞 |
-| `fpsLimiter.delay()` | render thread 持有 `next_frame_at` 做 FPS gate |
-| `SDL_GL_SwapWindow` | render thread 调 `GraphicsState::update()` / `frame.present()` |
+| window resize notification | `WindowOutput::SurfaceResized -> RenderCommand::SurfaceResized` |
+| fullscreen toggle | `WindowController` 在 winit main thread 直接调用 `window.set_fullscreen` |
+| viewport scale change | `WindowOutput::ViewportScaleModeChanged -> RenderCommand` |
+| reset | `WindowOutput::RestartRequested -> RuntimeControl::request_restart` |
+| terminate | shutdown control + `RenderCommand::Shutdown` + join threads |
 
-早期迁移草案曾计划在 winit `AboutToWait` 中渲染。macOS 输入法快速切换会让主线程长时间不回到
-winit handler，因此目标设计改为独立 render host thread。完整设计见
-[`FRAME_LOOP_DESIGN.md`](FRAME_LOOP_DESIGN.md)。
+未来 script-originated window requests 需要显式设计 command 通道，例如改标题、
+居中、显示/隐藏光标、message box。不要把 “winit 直接函数调用” 理解成
+script thread 可以直接操作 window。
 
-### 15. 应用前后台
+## 帧渲染
 
-mkxp-z 通过 `SDL_APP_WILLENTERBACKGROUND` 暂停音频。
-桌面平台通常不需要。v1 可忽略。
-
----
-
-## 第三阶段：退出
-
-| mkxp-z | winit |
+| mkxp-z | mkxp-rs |
 |---|---|
-| `WINDOWEVENT_CLOSE` → `terminate=true` | `elwt.exit()` |
-| `rqTerm.set()` → 等 `rqTermAck` | `signals.shutdown = true` → `ruby_thread.join()` |
-| `SDL_WaitThread(rgssThread)` | `thread.join()` |
-| `SDL_GameControllerClose` | gilrs 自动管理 |
-| `alcCloseDevice` → `SDL_DestroyWindow` → `SDL_Quit` | winit/wgpu 自动 Drop |
+| RGSS thread 调 `Graphics::update()` | script thread 调 `ScriptContext::submit_frame_and_wait()` |
+| `fpsLimiter.delay()` | render thread 持有 fixed frame timeline |
+| `SDL_GL_SwapWindow` | render thread 调 `GraphicsState::update()` / `present()` |
+| SDL event loop 可参与 redraw | winit main thread 不驱动每帧 render |
 
----
+早期草案尝试在 `AboutToWait` 或 `RedrawRequested` 中 render。macOS 输入源快速切换
+会让 main thread 长时间不回到 handler，因此当前设计改为独立 render thread。
 
-## 总结：winit 要做的完整清单
+## 退出阶段
 
-```
+| mkxp-z | mkxp-rs |
+|---|---|
+| `terminate = true` | `RuntimeControl::request_shutdown()` |
+| `rqTerm.set()` | `FrameSync::wake_all()` + `RenderCommand::Shutdown` |
+| `SDL_WaitThread(rgssThread)` | join script thread |
+| destroy GL/window | join render thread，drop `SharedRuntime`，再 drop `WindowController` |
+
+`JoinHandle` 不能只 drop；必须 join。`GraphicsState`/surface 必须先于 window drop。
+
+## 当前清单
+
+```text
 启动阶段：
-  □ 1.  加载 Config
-  □ 2.  创建 EventLoop
-  □ 3.  创建 winit Window（标题、尺寸、resizable、fullscreen）
-  □ 4.  设置窗口图标（Linux）
-  □ 5.  创建 wgpu Instance → Adapter → Device + Queue
-  □ 6.  从 Window 创建 wgpu Surface
-  □ 7.  创建 GraphicsState（传入 Device/Queue/Surface）
-  □ 8.  创建 AudioManager
-  □ 9.  创建 Shared { graphics, input, signals, frame_sync, config }
-  □ 10. 启动 render thread（传入 Arc<Shared> + RenderCommand receiver）
-  □ 11. 启动 Ruby 线程（传入 Arc<Shared>）
+  ✓ 加载 Config 并生成 RuntimeConfig
+  ✓ 初始化 logging
+  ✓ 创建 EventLoop<RuntimeEvent>
+  ✓ 创建 WindowController
+  ✓ 创建 wgpu Instance / Surface / Adapter / Device / Queue
+  ✓ 创建 SharedRuntime
+  ✓ 创建 RenderCommand channel
+  ✓ 启动 script thread
+  ✓ 启动 render thread
 
 事件循环阶段：
-  □ 12. WindowEvent::Resized → RenderCommand::SurfaceResized
-  □ 13. WindowEvent::CloseRequested → elwt.exit()
-  □ 14. WindowEvent::Focused(false) → 清空输入状态
-  □ 15. WindowEvent::KeyboardInput
-         - Alt+Enter → 切换全屏
-         - F12 → signals.reset = true
-         - F2 → 切换 FPS 显示
-         - 其他 → input.keys[scancode] = pressed
-  □ 16. WindowEvent::CursorMoved / MouseInput / MouseWheel → input 原子变量
-  □ 17. [可选] gilrs 手柄事件 → input.controller
-  □ 18. [可选] Touch 事件
-  □ 19. AboutToWait：drain menu/window housekeeping only，不执行每帧 render
+  ✓ WindowEvent -> WindowController
+  ✓ SurfaceResized -> RenderCommand::SurfaceResized
+  ✓ ViewportScaleModeChanged -> RenderCommand::ViewportScaleModeChanged
+  ✓ QuitRequested -> shutdown + event_loop.exit()
+  ✓ RestartRequested -> runtime restart flow
+  □ 普通 keyboard/mouse input service
+  □ gamepad input service
+  □ script-originated window commands
 
 退出阶段：
-  □ 20. signals.shutdown = true
-  □ 21. RenderCommand::Shutdown + frame_sync.wake_all()
-  □ 22. ruby_thread.join()
-  □ 23. render_thread.join()
-  □ 24. graphics/runtime 先 drop，window 后 drop
+  ✓ request shutdown
+  ✓ wake FrameSync
+  ✓ send RenderCommand::Shutdown
+  ✓ join script thread
+  ✓ join render thread
+  ✓ drop graphics/runtime before window
 ```
 
----
+## winit 不需要复刻的 SDL 机制
 
-## mkxp-z 有而 winit 不需要做的
-
-| mkxp-z | 为什么 winit 不需要 |
+| mkxp-z | mkxp-rs 处理方式 |
 |---|---|
-| `EventThread::allocUserEvents()` | 自定义事件机制。窗口操作直接函数调用 |
-| `windowSizeMsg` 跨线程消息 | winit 和 Ruby 共享同一套状态，无消息传递 |
-| `SDL_GL_MakeCurrent` 上下文切换 | wgpu 的 Device 是 Send+Sync，不需要切换线程 |
-| `SyncPoint` 暂停/恢复线程 | 桌面 v1 不需要后台暂停 |
-| `SDL_GetDrawableSize` vs `SDL_GetWindowSize` | wgpu 统一处理物理/逻辑像素 |
-| `IMG_Init` / `TTF_Init` / `Sound_Init` | 分别被 `image` / `ab_glyph` / `mkxp-audio` 替代 |
+| `EventThread::allocUserEvents()` | 不复刻 SDL user event；使用 typed Rust channels/events |
+| `windowSizeMsg` / `drawableSizeMsg` | resize 经 `WindowOutput` 和 `RenderCommand` 到 render host |
+| `SDL_GL_MakeCurrent` | wgpu device/queue/surface 由 render host 使用 |
+| `IMG_Init` / `TTF_Init` / `Sound_Init` | 分别由 Rust crate 或未来子系统处理 |
+| SDL controller API | 未来使用 `gilrs` 或独立 input backend |

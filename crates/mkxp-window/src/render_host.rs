@@ -1,3 +1,10 @@
+//! Render-thread host for the window runtime.
+//!
+//! The render host owns frame timing and presentation. It waits for script-ready
+//! frames through `FrameSync`, drains `RenderCommand`s from the winit main
+//! thread, applies those commands to `GraphicsState`, and then presents exactly
+//! one frame before waking the script side.
+
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::thread;

@@ -1,3 +1,10 @@
+//! Shared runtime state used by the winit, render, and script hosts.
+//!
+//! `SharedRuntime` is the narrow cross-thread boundary for the current window
+//! host. The winit thread owns window lifecycle, the render thread owns frame
+//! presentation, and the script thread owns script execution. Shared state lives
+//! here only when it must be visible across those boundaries.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -12,6 +19,12 @@ const DEFAULT_FPS: u32 = 60;
 
 // ── Runtime config ──
 
+/// Runtime settings consumed by the window host after `mkxp_config` has been
+/// normalized.
+///
+/// The original config object can contain optional values and sections for
+/// future subsystems. This type stores the concrete values needed by the current
+/// window/render/script host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeConfig {
     pub(crate) window_title: String,
@@ -69,14 +82,18 @@ impl From<mkxp_config::Config> for RuntimeConfig {
 
 // ── Runtime events ──
 
+/// User events sent back to the winit event loop by host threads.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RuntimeEvent {
+    /// The script thread recorded an outcome and exited.
     ScriptExited,
+    /// The render thread recorded a fatal error or stopped unexpectedly.
     RenderExited,
 }
 
 // ── Outcome slots ──
 
+/// Single-consumer storage for the last script thread outcome.
 #[derive(Default)]
 pub(crate) struct ScriptOutcomeSlot {
     result: Mutex<Option<ScriptRunResult>>,
@@ -92,6 +109,7 @@ impl ScriptOutcomeSlot {
     }
 }
 
+/// Single-consumer storage for the last render thread error.
 #[derive(Default)]
 pub(crate) struct RenderOutcomeSlot {
     result: Mutex<Option<RenderError>>,
@@ -109,6 +127,12 @@ impl RenderOutcomeSlot {
 
 // ── Runtime control ──
 
+/// Cross-thread lifecycle flags.
+///
+/// Shutdown is terminal for the whole runtime. Restart is a script-only control
+/// path: it wakes the script out of `Graphics.update`, joins that script thread,
+/// and spawns a fresh engine instance without rebuilding the window or render
+/// host.
 #[derive(Default)]
 pub(crate) struct RuntimeControl {
     shutdown: AtomicBool,
@@ -139,6 +163,12 @@ impl RuntimeControl {
 
 // ── SharedRuntime ──
 
+/// Shared state for the current window runtime.
+///
+/// `GraphicsState` is protected by a mutex because the script thread mutates
+/// script-facing demo graphics before submitting a frame, while the render thread
+/// applies window commands and presents the frame after `FrameSync` marks it
+/// ready. The frame protocol prevents normal script/render mutation overlap.
 pub(crate) struct SharedRuntime {
     #[allow(
         dead_code,

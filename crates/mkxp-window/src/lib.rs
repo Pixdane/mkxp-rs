@@ -1,3 +1,18 @@
+//! Window runtime entry point for the mkxp-rs demo host.
+//!
+//! This crate exposes the winit application as a library entry so the binary can
+//! stay thin and future binaries can choose a different script engine boundary
+//! without duplicating the window/render bootstrap.
+//!
+//! The public entry point loads configuration, initializes logging, creates the
+//! winit event loop, and runs `App<DemoScriptEngine>`.
+//!
+//! ```no_run
+//! fn main() -> anyhow::Result<()> {
+//!     mkxp_window::run_demo()
+//! }
+//! ```
+
 mod app;
 mod error;
 mod frame_sync;
@@ -15,6 +30,21 @@ use crate::app::App;
 use crate::runtime::{RuntimeConfig, RuntimeEvent};
 use crate::script_host::DemoScriptEngine;
 
+/// Run the default mkxp-rs demo window.
+///
+/// This function owns process-level startup for the demo binary: it loads the
+/// runtime configuration, initializes logging, creates the winit event loop, and
+/// delegates application lifecycle to `App<DemoScriptEngine>`.
+///
+/// The function returns only after the winit event loop exits. Fatal script,
+/// render, window, or bootstrap errors are converted into the returned
+/// `anyhow::Result`.
+///
+/// ```no_run
+/// fn main() -> anyhow::Result<()> {
+///     mkxp_window::run_demo()
+/// }
+/// ```
 pub fn run_demo() -> anyhow::Result<()> {
     let config = mkxp_config::load(std::env::args().collect())?;
     mkxp_log::init(mkxp_log::LogConfig::from(&config))?;

@@ -18,6 +18,12 @@ use crate::window_control::{WindowConfig, WindowController, WindowOutput};
 
 // ── App ──
 
+/// winit application host.
+///
+/// `App` owns the platform lifecycle and all host-thread handles. The generic
+/// script engine parameter is the selected script implementation for this run;
+/// restart creates a fresh `E::default()` without rebuilding the window or
+/// render host.
 pub(crate) struct App<E: ScriptEngine> {
     _engine: PhantomData<E>,
     event_loop_proxy: EventLoopProxy<RuntimeEvent>,
@@ -123,10 +129,14 @@ impl<E: ScriptEngine> App<E> {
         });
 
         let surface: wgpu::Surface<'static> = unsafe {
-            // Safety: `shutdown` joins the script/render threads and drops
-            // `SharedRuntime`/`GraphicsState` before dropping `WindowController`,
-            // so the surface never outlives the winit window it was created
-            // from. The widened lifetime mirrors that explicit ownership.
+            // Safety: wgpu ties the surface lifetime to the borrowed winit
+            // window. This host stores the surface inside `SharedRuntime` and
+            // the window inside `WindowController`, so the compiler cannot see
+            // the relationship directly. `App::shutdown` is the invariant that
+            // makes the widened lifetime sound: it requests shutdown, wakes and
+            // joins the script/render threads, drops `SharedRuntime` (and thus
+            // `GraphicsState`/surface), and only then drops `WindowController`.
+            // No cloned surface is exposed outside that ownership chain.
             std::mem::transmute(instance.create_surface(window.window())?)
         };
         debug!("wgpu surface created");

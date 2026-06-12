@@ -1,19 +1,23 @@
-//! Window control boundary: owns the window, menu, resize policy, and fullscreen/scale state.
+//! Window control boundary for platform window policy.
 //!
-//! `WindowController` exposes a clean event-based API so the runtime only needs to
-//! apply [`WindowOutput`] events to [`GraphicsState`]. It does **not** own any wgpu
-//! resources or know about rendering.
+//! `WindowController` owns the winit window, platform menu, resize policy, and
+//! fullscreen/scale state. It does **not** own wgpu resources and does not render.
+//! Render-affecting effects are emitted as [`WindowOutput`] values; `App`
+//! translates those outputs into render-thread commands.
 //!
 //! ## Architecture
 //!
 //! ```text
 //! WindowController
 //!   owns: winit::Window, muda::Menu, receiver, menu items, policy state
-//!   outputs: WindowOutput events for the runtime to apply
+//!   outputs: WindowOutput events
 //!
-//! Runtime (main)
-//!   owns: WindowController, GraphicsState
-//!   applies: WindowOutput → graphics.resize / graphics.set_viewport_scale_mode
+//! App / winit main thread
+//!   owns: WindowController, SharedRuntime, host thread handles
+//!   translates: WindowOutput -> RenderCommand or lifecycle action
+//!
+//! render thread
+//!   applies: RenderCommand -> SharedRuntime.graphics
 //! ```
 //!
 //! See `docs/WINDOW_CONTROLLER_DESIGN.md` and `docs/WINDOW_CONSTRAINTS.md`.
@@ -96,21 +100,28 @@ impl std::error::Error for WindowControllerError {
 
 // ── Output events ──
 
-/// Events emitted by [`WindowController`] for the runtime to handle.
+/// Events emitted by [`WindowController`] for `App` to handle.
 ///
-/// The runtime is expected to forward these to the appropriate subsystem
-/// (e.g. `GraphicsState::on_resize` for `SurfaceResized`).
+/// The winit main thread must not mutate `GraphicsState` directly. Outputs that
+/// affect rendering are translated to render-thread commands; lifecycle outputs
+/// remain owned by `App` because it owns `ActiveEventLoop` and host threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowOutput {
-    /// The window surface was resized. The runtime must reconfigure the wgpu surface.
-    /// Size is the *actual* window size, which may be off-ratio.
+    /// The window surface was resized.
+    ///
+    /// Size is the actual window inner size, which may be temporarily off-ratio
+    /// during live resize or while waiting for a programmatic resize request to
+    /// settle.
     SurfaceResized {
         /// Actual window inner width.
         width: u32,
         /// Actual window inner height.
         height: u32,
     },
-    /// The viewport scale mode should change (only meaningful in fullscreen).
+    /// The viewport scale mode should change.
+    ///
+    /// This is mostly driven by fullscreen menu state. Windowed `Fit` and
+    /// integer-scale commands resize the window instead of changing viewport mode.
     ViewportScaleModeChanged(ViewportScaleMode),
     /// The user requested the application to quit.
     QuitRequested,
@@ -243,6 +254,9 @@ struct MenuItems {
 // ── Pure helpers (tests can use these without platform) ──
 
 /// Compute the largest 4:3 inner size that fits within `(w, h)`.
+///
+/// This helper is intentionally pure so the resize policy can be tested without
+/// creating a platform window.
 pub(crate) fn fit_aspect_size(w: u32, h: u32) -> (u32, u32) {
     if (w as u64) * 3 > (h as u64) * 4 {
         (((h as f64 * 4.0 / 3.0).round()) as u32, h)
@@ -251,7 +265,10 @@ pub(crate) fn fit_aspect_size(w: u32, h: u32) -> (u32, u32) {
     }
 }
 
-/// Returns `Some(WindowScaleMark)` when `(w, h)` exactly matches a windowed integer scale.
+/// Returns `Some(WindowScaleMark)` when `(w, h)` exactly matches a windowed
+/// integer scale.
+///
+/// The menu checkmark reflects actual window size, not the last clicked command.
 pub(crate) fn window_scale_mark(w: u32, h: u32) -> Option<WindowScaleMark> {
     if w == 0 || h == 0 {
         return None;
@@ -272,6 +289,10 @@ fn integer_size(n: u32) -> (u32, u32) {
 }
 
 /// Classify a resize event: does it need aspect-ratio correction?
+///
+/// A correction decision does not replace the resize output. The caller still
+/// emits the actual surface size so the render thread can keep the wgpu surface
+/// synchronized with the platform window.
 pub(crate) fn classify_resize(
     w: u32,
     h: u32,

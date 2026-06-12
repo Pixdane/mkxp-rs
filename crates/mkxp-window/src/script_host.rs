@@ -1,3 +1,10 @@
+//! Script-thread host and engine boundary.
+//!
+//! A `ScriptEngine` owns one script run. Restart is implemented by letting the
+//! current engine return `ScriptExit::RestartRequested`, joining that thread, and
+//! spawning a fresh `E::default()` instance against the same window/render
+//! runtime.
+
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::thread;
@@ -12,13 +19,21 @@ use crate::error::{ScriptError, ScriptExit, ScriptRunResult, panic_payload_to_st
 use crate::runtime::{RuntimeConfig, RuntimeEvent, SharedRuntime};
 use crate::window_control::{GAME_H, GAME_W};
 
+/// A script engine that can run on the script host thread.
+///
+/// Implementations should keep per-run script state inside the engine instance.
+/// `App<E>` creates a fresh `E::default()` for each restart.
 pub(crate) trait ScriptEngine: Default + Send + 'static {
+    /// Run the engine until it finishes, fails, shuts down, or requests restart.
     fn run(self, ctx: ScriptContext) -> ScriptRunResult;
 }
 
+/// Result of the script-side `Graphics.update` boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScriptFrameAction {
+    /// The frame was rendered and the script may continue updating.
     Continue,
+    /// Runtime shutdown was requested.
     Shutdown,
     #[allow(
         dead_code,
@@ -27,6 +42,11 @@ pub(crate) enum ScriptFrameAction {
     Restart,
 }
 
+/// Script-facing access to shared runtime services.
+///
+/// The context intentionally exposes a small API: read lifecycle/config state,
+/// mutate graphics state before submitting a frame, and block at the
+/// `Graphics.update` boundary.
 pub(crate) struct ScriptContext {
     runtime: Arc<SharedRuntime>,
 }
@@ -40,6 +60,11 @@ impl ScriptContext {
         self.runtime.control.is_shutdown_requested()
     }
 
+    /// Mutate script-facing graphics state.
+    ///
+    /// Callers should keep this closure small. The render thread also needs the
+    /// graphics mutex after the script submits a frame, so script code must not
+    /// hold the lock across `submit_frame_and_wait`.
     pub(crate) fn with_graphics<T>(&self, f: impl FnOnce(&mut GraphicsState) -> T) -> T {
         f(&mut self.runtime.graphics.lock().unwrap())
     }
@@ -52,6 +77,8 @@ impl ScriptContext {
         &self.runtime.config
     }
 
+    /// Submit the current script-produced frame and block until the render host
+    /// presents it or lifecycle control requests shutdown/restart.
     pub(crate) fn submit_frame_and_wait(&self) -> ScriptFrameAction {
         self.runtime
             .frame_sync
@@ -59,6 +86,7 @@ impl ScriptContext {
     }
 }
 
+/// Demo engine used by the default binary entry point.
 #[derive(Default)]
 pub(crate) struct DemoScriptEngine;
 
@@ -148,7 +176,11 @@ mod tests {
 
     #[test]
     fn demo_script_engine_can_be_created_for_each_run() {
+        fn new_engine<E: ScriptEngine>() -> E {
+            E::default()
+        }
+
         let _first = DemoScriptEngine;
-        let _second = DemoScriptEngine::default();
+        let _second: DemoScriptEngine = new_engine();
     }
 }
