@@ -175,13 +175,10 @@ WindowEvent::KeyboardInput {
     // 特殊按键——直接在 winit 线程处理
     if pressed {
         match physical_key {
-            KeyCode::F12 => signals.reset.store(true, Release),
+            KeyCode::F12 => outputs.push(WindowOutput::RestartRequested),
             KeyCode::F2  => fps_display_toggle(),
             _ => {}
         }
-    }
-    if !pressed && physical_key == KeyCode::F12 {
-        signals.reset_done.store(true, Release);
     }
 
     // 普通按键——写入共享数组给 Ruby 读

@@ -1,6 +1,5 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
@@ -186,6 +185,9 @@ impl<E: ScriptEngine> App<E> {
                     self.initiate_shutdown();
                     event_loop.exit();
                 }
+                WindowOutput::RestartRequested => {
+                    self.request_script_restart();
+                }
             }
         }
     }
@@ -216,6 +218,11 @@ impl<E: ScriptEngine> App<E> {
         match result {
             Ok(ScriptExit::Finished) => info!("script engine finished"),
             Ok(ScriptExit::ShutdownRequested) => info!("script engine stopped after shutdown"),
+            Ok(ScriptExit::RestartRequested) => {
+                info!("script engine restarting");
+                self.restart_script_thread();
+                return true;
+            }
             Err(error) => {
                 let error = WindowError::from(error);
                 error!(%error, "script engine exited with error");
@@ -226,6 +233,39 @@ impl<E: ScriptEngine> App<E> {
         self.initiate_shutdown();
         event_loop.exit();
         true
+    }
+
+    fn request_script_restart(&mut self) {
+        let Some(runtime) = &self.runtime else {
+            return;
+        };
+        if runtime.control.is_shutdown_requested() {
+            return;
+        }
+
+        runtime.control.request_restart();
+        runtime.frame_sync.reset();
+        runtime.frame_sync.wake_all();
+    }
+
+    fn restart_script_thread(&mut self) {
+        let Some(runtime) = self.runtime.clone() else {
+            return;
+        };
+        if runtime.control.is_shutdown_requested() {
+            return;
+        }
+
+        if let Some(handle) = self.script_thread.take() {
+            let _ = handle.join();
+        }
+
+        runtime.prepare_script_restart();
+        self.script_thread = Some(spawn_script_thread(
+            E::default(),
+            runtime,
+            self.event_loop_proxy.clone(),
+        ));
     }
 
     fn handle_render_exit(&mut self, event_loop: &ActiveEventLoop) {
@@ -246,7 +286,7 @@ impl<E: ScriptEngine> App<E> {
 
     fn initiate_shutdown(&mut self) {
         if let Some(runtime) = &self.runtime {
-            runtime.shutdown.store(true, Ordering::Release);
+            runtime.control.request_shutdown();
             runtime.frame_sync.wake_all();
         }
         // Also send RenderCommand::Shutdown so the render thread exits even if

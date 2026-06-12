@@ -1,6 +1,5 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -37,7 +36,7 @@ impl ScriptContext {
     }
 
     pub(crate) fn is_shutdown_requested(&self) -> bool {
-        self.runtime.shutdown.load(Ordering::Acquire)
+        self.runtime.control.is_shutdown_requested()
     }
 
     pub(crate) fn with_graphics<T>(&self, f: impl FnOnce(&mut GraphicsState) -> T) -> T {
@@ -55,7 +54,7 @@ impl ScriptContext {
     pub(crate) fn submit_frame_and_wait(&self) -> ScriptFrameAction {
         self.runtime
             .frame_sync
-            .script_frame_ready_and_wait(&self.runtime.shutdown)
+            .script_frame_ready_and_wait(&self.runtime.control)
     }
 }
 
@@ -89,7 +88,7 @@ impl ScriptEngine for DemoScriptEngine {
             match ctx.submit_frame_and_wait() {
                 ScriptFrameAction::Continue => {}
                 ScriptFrameAction::Shutdown => return Ok(ScriptExit::ShutdownRequested),
-                ScriptFrameAction::Restart => return Ok(ScriptExit::ShutdownRequested),
+                ScriptFrameAction::Restart => return Ok(ScriptExit::RestartRequested),
             }
         }
 

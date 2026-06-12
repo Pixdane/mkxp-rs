@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use mkxp_graphics::GraphicsState;
 
@@ -107,6 +107,36 @@ impl RenderOutcomeSlot {
     }
 }
 
+// ── Runtime control ──
+
+#[derive(Default)]
+pub(crate) struct RuntimeControl {
+    shutdown: AtomicBool,
+    restart: AtomicBool,
+}
+
+impl RuntimeControl {
+    pub(crate) fn request_shutdown(&self) {
+        self.shutdown.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_shutdown_requested(&self) -> bool {
+        self.shutdown.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn request_restart(&self) {
+        self.restart.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn clear_restart(&self) {
+        self.restart.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn is_restart_requested(&self) -> bool {
+        self.restart.load(Ordering::Acquire)
+    }
+}
+
 // ── SharedRuntime ──
 
 pub(crate) struct SharedRuntime {
@@ -119,7 +149,7 @@ pub(crate) struct SharedRuntime {
     pub(crate) frame_sync: FrameSync,
     script_outcome: ScriptOutcomeSlot,
     render_outcome: RenderOutcomeSlot,
-    pub(crate) shutdown: AtomicBool,
+    pub(crate) control: RuntimeControl,
 }
 
 impl SharedRuntime {
@@ -160,13 +190,13 @@ impl SharedRuntime {
             frame_sync: FrameSync::default(),
             script_outcome: ScriptOutcomeSlot::default(),
             render_outcome: RenderOutcomeSlot::default(),
-            shutdown: AtomicBool::new(false),
+            control: RuntimeControl::default(),
         }
     }
 
     pub(crate) fn record_script_result(&self, result: ScriptRunResult) {
         if result.is_err() {
-            self.shutdown.store(true, Ordering::Release);
+            self.control.request_shutdown();
             self.frame_sync.wake_all();
         }
         self.script_outcome.record(result);
@@ -183,6 +213,12 @@ impl SharedRuntime {
     pub(crate) fn take_render_error(&self) -> Option<RenderError> {
         self.render_outcome.take()
     }
+
+    pub(crate) fn prepare_script_restart(&self) {
+        self.script_outcome.take();
+        self.control.clear_restart();
+        self.frame_sync.reset();
+    }
 }
 
 // ── Tests ──
@@ -192,7 +228,7 @@ mod tests {
     use crate::error::{ScriptError, ScriptExit, panic_payload_to_string};
     use crate::render_host::RenderError;
 
-    use super::{RenderOutcomeSlot, RuntimeConfig, ScriptOutcomeSlot};
+    use super::{RenderOutcomeSlot, RuntimeConfig, RuntimeControl, ScriptOutcomeSlot};
 
     #[test]
     fn runtime_config_default_values_match_demo_defaults() {
@@ -241,6 +277,32 @@ mod tests {
         assert!(!config.enable_reset);
         assert_eq!(config.scripts_path.as_deref(), Some("Data/Scripts.rvdata2"));
         assert_eq!(config.rgss_version.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn runtime_control_keeps_restart_distinct_from_shutdown() {
+        let control = RuntimeControl::default();
+
+        control.request_restart();
+
+        assert!(control.is_restart_requested());
+        assert!(!control.is_shutdown_requested());
+
+        control.clear_restart();
+
+        assert!(!control.is_restart_requested());
+        assert!(!control.is_shutdown_requested());
+    }
+
+    #[test]
+    fn runtime_control_shutdown_can_coexist_with_restart() {
+        let control = RuntimeControl::default();
+
+        control.request_restart();
+        control.request_shutdown();
+
+        assert!(control.is_restart_requested());
+        assert!(control.is_shutdown_requested());
     }
 
     #[test]

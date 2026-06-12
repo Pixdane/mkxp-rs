@@ -116,13 +116,15 @@ type ScriptRunResult = Result<ScriptExit, ScriptError>;
 ```
 
 The script thread wrapper must catch Rust panics and convert them into
-`ScriptError::Panic`. The winit thread then converts script errors into
-`WindowError`, logs them through `tracing`, requests `event_loop.exit()`, and
-returns the fatal error through the binary `anyhow::Result` path after
-`run_app()` exits.
+`ScriptError::Panic`. On `ScriptExit::RestartRequested`, the winit thread joins
+the old script thread, clears the restart/frame state, and spawns a fresh
+`E::default()` while keeping the window and render host alive. On script errors,
+the winit thread converts script errors into `WindowError`, logs them through
+`tracing`, requests `event_loop.exit()`, and returns the fatal error through the
+binary `anyhow::Result` path after `run_app()` exits.
 
-This keeps panic, Ruby exception, normal script completion, and shutdown on one
-host-owned path.
+This keeps panic, Ruby exception, normal script completion, restart, and shutdown
+on one host-owned path.
 
 ## Current implementation
 

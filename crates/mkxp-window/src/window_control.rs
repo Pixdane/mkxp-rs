@@ -114,6 +114,8 @@ pub(crate) enum WindowOutput {
     ViewportScaleModeChanged(ViewportScaleMode),
     /// The user requested the application to quit.
     QuitRequested,
+    /// The user requested a script restart/reset.
+    RestartRequested,
 }
 
 // ── Public pure-function API (testable without platform resources) ──
@@ -229,6 +231,7 @@ struct WindowModeSync {
 // ── MenuItems ──
 
 struct MenuItems {
+    _restart: MenuItem,
     fit: CheckMenuItem,
     scale_1x: CheckMenuItem,
     scale_2x: CheckMenuItem,
@@ -329,6 +332,10 @@ fn viewport_mode_for_fullscreen_scale(mode: FullscreenScaleMode) -> ViewportScal
         FullscreenScaleMode::Fit => ViewportScaleMode::Fit,
         FullscreenScaleMode::Integer(n) => ViewportScaleMode::Integer(n),
     }
+}
+
+fn key_requests_restart(key: KeyCode) -> bool {
+    key == KeyCode::F12
 }
 
 fn sync_window_mode(
@@ -466,6 +473,7 @@ impl WindowController {
                 "scale_3x" => outputs.extend(self.handle_menu_integer_scale(3)),
                 "scale_4x" => outputs.extend(self.handle_menu_integer_scale(4)),
                 "lock_aspect" => outputs.extend(self.handle_menu_lock_aspect()),
+                "restart" => outputs.push(WindowOutput::RestartRequested),
                 "quit" => outputs.push(WindowOutput::QuitRequested),
                 _ => {}
             }
@@ -511,6 +519,7 @@ impl WindowController {
         let scale_4x = CheckMenuItem::with_id("scale_4x", "4x (2560\u{d7}1920)", true, false, None);
         let lock_aspect =
             CheckMenuItem::with_id("lock_aspect", "Lock Aspect Ratio", true, false, None);
+        let restart = MenuItem::with_id("restart", "Restart", true, None);
 
         let view_menu = Submenu::new("View", true);
         view_menu.append_items(&[&fit, &scale_1x, &scale_2x, &scale_3x, &scale_4x])?;
@@ -520,7 +529,11 @@ impl WindowController {
         let help_menu = Submenu::new("Help", true);
         help_menu.append(&MenuItem::with_id("about", "About mkxp-rs", true, None))?;
 
+        let game_menu = Submenu::new("Game", true);
+        game_menu.append(&restart)?;
+
         menu.append(&view_menu)?;
+        menu.append(&game_menu)?;
         menu.append(&help_menu)?;
 
         let app_menu = Submenu::new("mkxp-rs", true);
@@ -534,6 +547,7 @@ impl WindowController {
             menu,
             MenuEvent::receiver().clone(),
             MenuItems {
+                _restart: restart,
                 fit,
                 scale_1x,
                 scale_2x,
@@ -603,6 +617,9 @@ impl WindowController {
     fn handle_key(&mut self, key: KeyCode) -> Vec<WindowOutput> {
         if self.modifiers.alt_key() && key == KeyCode::Enter {
             return self.toggle_fullscreen();
+        }
+        if key_requests_restart(key) {
+            return vec![WindowOutput::RestartRequested];
         }
 
         Vec::new()
@@ -856,6 +873,12 @@ mod tests {
         assert!(!should_request_windowed_fit_after_aspect_toggle(
             false, false
         ));
+    }
+
+    #[test]
+    fn f12_requests_restart() {
+        assert!(key_requests_restart(KeyCode::F12));
+        assert!(!key_requests_restart(KeyCode::F2));
     }
 
     #[test]

@@ -31,6 +31,7 @@ pub(crate) enum WindowError {
 pub(crate) enum ScriptExit {
     Finished,
     ShutdownRequested,
+    RestartRequested,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,7 @@ impl std::fmt::Display for ScriptExit {
         match self {
             Self::Finished => f.write_str("script finished"),
             Self::ShutdownRequested => f.write_str("script shutdown requested"),
+            Self::RestartRequested => f.write_str("script restart requested"),
         }
     }
 }

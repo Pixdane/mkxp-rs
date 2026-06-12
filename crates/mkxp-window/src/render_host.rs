@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::thread;
 use std::thread::JoinHandle;
@@ -86,7 +85,7 @@ pub(crate) fn spawn_render_thread(
             Err(error) => {
                 error!(%error, "render thread exited with error");
                 runtime.record_render_error(error);
-                runtime.shutdown.store(true, Ordering::Release);
+                runtime.control.request_shutdown();
                 runtime.frame_sync.wake_all();
                 let _ = proxy.send_event(RuntimeEvent::RenderExited);
             }
@@ -108,7 +107,7 @@ fn render_loop(
         // 1. Wait for a script-ready frame or shutdown.
         match runtime
             .frame_sync
-            .wait_for_ready_or_shutdown(&runtime.shutdown)
+            .wait_for_ready_or_shutdown(&runtime.control)
         {
             crate::frame_sync::FrameWait::Shutdown => return Ok(()),
             crate::frame_sync::FrameWait::Ready { .. } => {}
@@ -132,8 +131,12 @@ fn render_loop(
         }
 
         // 5. Re-check shutdown after the sleep window.
-        if runtime.shutdown.load(Ordering::Acquire) {
+        if runtime.control.is_shutdown_requested() {
             return Ok(());
+        }
+        if runtime.control.is_restart_requested() {
+            runtime.frame_sync.reset();
+            continue;
         }
 
         // 6. Render the frame.

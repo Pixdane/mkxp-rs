@@ -168,6 +168,7 @@ enum WindowMenuCommand {
     Fit,
     IntegerScale(u32),
     ToggleAspectLock,
+    Restart,
     Quit,
 }
 ```
@@ -175,6 +176,7 @@ enum WindowMenuCommand {
 窗口级快捷键由 `WindowController` 消费：
 
 - `Alt+Enter`：切换全屏
+- `F12`：请求脚本重启/reset
 
 普通游戏输入不应被窗口控制器解释为窗口命令。未来接入 input service 后，
 窗口控制器可以把未消费的键盘输入作为 runtime input event 输出。
@@ -189,6 +191,7 @@ pub enum WindowOutput {
     SurfaceResized { width: u32, height: u32 },
     ViewportScaleModeChanged(ViewportScaleMode),
     Input(InputEvent),
+    RestartRequested,
     QuitRequested,
 }
 ```
@@ -238,6 +241,9 @@ fn translate_window_output(
         }
         WindowOutput::QuitRequested => {
             // handled by App because it owns ActiveEventLoop
+        }
+        WindowOutput::RestartRequested => {
+            // handled by App because it owns script thread lifecycle
         }
         WindowOutput::Input(event) => {
             // future InputService

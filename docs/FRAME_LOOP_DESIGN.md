@@ -186,9 +186,10 @@ Required operations:
 
 ```rust
 impl FrameSync {
-    fn script_frame_ready_and_wait(&self, shutdown: &AtomicBool) -> ScriptFrameAction;
-    fn wait_for_ready_or_shutdown(&self, shutdown: &AtomicBool) -> FrameWait;
+    fn script_frame_ready_and_wait(&self, control: &RuntimeControl) -> ScriptFrameAction;
+    fn wait_for_ready_or_shutdown(&self, control: &RuntimeControl) -> FrameWait;
     fn render_finished(&self);
+    fn reset(&self);
     fn wake_all(&self);
 }
 
@@ -208,6 +209,12 @@ The script side no longer needs to wake winit for normal per-frame rendering.
 `ScriptContext::submit_frame_and_wait()` should call
 `script_frame_ready_and_wait()` and block until the render thread calls
 `render_finished()` or runtime control requests shutdown/restart.
+
+Runtime control keeps shutdown and restart separate. Shutdown is terminal and
+causes the render host to exit. Restart wakes the blocked script, clears any
+pending frame through `FrameSync::reset()`, joins the old script after it
+reports `ScriptExit::RestartRequested`, and spawns a fresh `E::default()`
+without recreating the window or render host.
 
 The render side blocks on the same `Condvar`. It wakes when:
 
@@ -370,6 +377,15 @@ ScriptError::Message / ScriptError::Panic
 The winit thread remains responsible for presenting/logging fatal script errors
 and exiting the app.
 
+Script restart is non-fatal:
+
+```text
+ScriptExit::RestartRequested
+  -> join old script thread
+  -> clear restart control and pending frame state
+  -> spawn_script_thread(E::default(), ...)
+```
+
 Render thread errors should use a separate result slot or command back to the
 winit thread:
 
@@ -401,7 +417,7 @@ Shutdown must be explicit:
 
 ```text
 App::exiting / fatal error / QuitRequested
-  shutdown = true
+  control.shutdown = true
   send RenderCommand::Shutdown
   FrameSync::wake_all()
   join script thread
@@ -572,6 +588,7 @@ Required test coverage:
 
 - `FrameSync` wakes render host when script frame becomes ready.
 - `FrameSync` shutdown releases a blocked script frame.
+- `FrameSync` restart releases a blocked script frame and clears pending frame state.
 - render host applies resize commands before rendering a ready frame.
 - render host releases the script thread after render.
 - render host exits on shutdown without leaving script blocked.
@@ -581,8 +598,8 @@ Required test coverage:
 
 The render-host migration is implemented in `mkxp-window`:
 
-- `main.rs` is a thin binary entry that declares private modules and calls
-  `app::run()`.
+- `main.rs` is the current binary entry: it initializes logging, creates the
+  winit event loop, selects `App::<DemoScriptEngine>`, and runs `run_app()`.
 - `app.rs` owns winit `ApplicationHandler`, wgpu bootstrap, event forwarding,
   shutdown, and thread joins.
 - `render_host.rs` owns `RenderCommand`, render-thread spawn, render timing,
