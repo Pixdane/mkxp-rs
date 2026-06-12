@@ -1,11 +1,10 @@
+mod script_host;
 mod window_control;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use std::{panic, panic::AssertUnwindSafe};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -15,6 +14,7 @@ use mkxp_graphics::GraphicsState;
 use mkxp_types::MkxpError;
 use tracing::{error, info};
 
+use crate::script_host::{DemoScriptEngine, spawn_script_thread};
 use crate::window_control::{
     GAME_H, GAME_W, WindowConfig, WindowController, WindowControllerError, WindowOutput,
 };
@@ -188,12 +188,6 @@ impl SharedRuntime {
         self.script_outcome.record(result);
     }
 
-    fn record_script_panic(&self, payload: Box<dyn std::any::Any + Send>) {
-        // The main thread owns the event loop and user-visible failure path, so
-        // script panics are stored here and handled from the next event-loop tick.
-        self.record_script_result(Err(ScriptError::Panic(panic_payload_to_string(payload))));
-    }
-
     fn take_script_result(&self) -> Option<ScriptRunResult> {
         self.script_outcome.take()
     }
@@ -225,7 +219,7 @@ fn run() -> anyhow::Result<()> {
 struct App {
     event_loop_proxy: EventLoopProxy<RuntimeEvent>,
     runtime: Option<Arc<SharedRuntime>>,
-    demo_thread: Option<JoinHandle<()>>,
+    script_thread: Option<JoinHandle<()>>,
     window: Option<WindowController>,
     fatal_error: Option<WindowError>,
     next_frame_at: Instant,
@@ -237,7 +231,7 @@ impl App {
         Self {
             event_loop_proxy,
             runtime: None,
-            demo_thread: None,
+            script_thread: None,
             window: None,
             fatal_error: None,
             next_frame_at: now,
@@ -347,25 +341,14 @@ impl App {
         };
 
         let runtime = Arc::new(SharedRuntime::new(device, queue, surface, surface_config));
-
-        let demo_runtime = runtime.clone();
-        let demo_proxy = self.event_loop_proxy.clone();
-        let demo_thread = thread::spawn(move || {
-            let script_runtime = demo_runtime.clone();
-            let script_proxy = demo_proxy.clone();
-            match panic::catch_unwind(AssertUnwindSafe(|| {
-                run_demo_script(script_runtime, script_proxy)
-            })) {
-                Ok(result) => demo_runtime.record_script_result(result),
-                Err(payload) => demo_runtime.record_script_panic(payload),
-            }
-            // Wake winit even if it is sleeping until the next frame; the main
-            // thread should observe and report script completion promptly.
-            let _ = demo_proxy.send_event(RuntimeEvent::ScriptExited);
-        });
+        let script_thread = spawn_script_thread(
+            Box::new(DemoScriptEngine),
+            runtime.clone(),
+            self.event_loop_proxy.clone(),
+        );
 
         self.runtime = Some(runtime);
-        self.demo_thread = Some(demo_thread);
+        self.script_thread = Some(script_thread);
         self.window = Some(window);
 
         Ok(())
@@ -475,7 +458,7 @@ impl App {
         // Dropping a JoinHandle only detaches the thread. Join explicitly so the
         // script cannot keep using `GraphicsState` while the window/surface are
         // being torn down.
-        if let Some(handle) = self.demo_thread.take() {
+        if let Some(handle) = self.script_thread.take() {
             let _ = handle.join();
         }
 
@@ -487,51 +470,6 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         self.shutdown();
-    }
-}
-
-fn run_demo_script(
-    runtime: Arc<SharedRuntime>,
-    proxy: EventLoopProxy<RuntimeEvent>,
-) -> ScriptRunResult {
-    let mut x = 220.0_f32;
-    let mut y = 165.0_f32;
-    let mut dx = 2.0_f32;
-    let mut dy = 1.5_f32;
-
-    while !runtime.shutdown.load(Ordering::Acquire) {
-        x += dx;
-        y += dy;
-        if x <= 0.0 || x + 200.0 >= GAME_W as f32 {
-            dx = -dx;
-        }
-        if y <= 0.0 || y + 150.0 >= GAME_H as f32 {
-            dy = -dy;
-        }
-        let r = (x / GAME_W as f32).clamp(0.0, 1.0);
-        let g = (y / GAME_H as f32).clamp(0.0, 1.0);
-        let b = 0.5;
-
-        runtime
-            .graphics
-            .lock()
-            .unwrap()
-            .set_test_quad(x, y, 200.0, 150.0, r, g, b);
-
-        if !runtime
-            .frame_sync
-            .script_frame_ready_and_wait(&runtime.shutdown, || {
-                let _ = proxy.send_event(RuntimeEvent::ScriptFrameReady);
-            })
-        {
-            return Ok(ScriptExit::ShutdownRequested);
-        }
-    }
-
-    if runtime.shutdown.load(Ordering::Acquire) {
-        Ok(ScriptExit::ShutdownRequested)
-    } else {
-        Ok(ScriptExit::Finished)
     }
 }
 
@@ -549,6 +487,7 @@ fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+    use std::thread;
 
     #[test]
     fn frame_sync_blocks_script_until_render_finishes() {

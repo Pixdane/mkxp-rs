@@ -1,17 +1,17 @@
 # Script host design
 
-This document records the current script host boundary decision. It is a
-staging design for replacing the demo script thread with a real RGSS/Ruby
-engine without leaking winit internals into the script layer.
+This document records the current script host boundary. It is the internal
+`mkxp-window` interface for replacing the demo script thread with a real
+RGSS/Ruby engine without leaking winit internals into the script layer.
 
 ## Decision
 
 Do not create a standalone `mkxp-scripts` crate yet.
 
-For the next implementation step, keep the script host abstraction inside
-`mkxp-window`, likely as `crates/mkxp-window/src/script_host.rs`. The current
-window binary still owns winit, `EventLoopProxy`, `FrameSync`, `GraphicsState`,
-and shutdown ordering, so an internal module is the honest boundary.
+Keep the script host abstraction inside `mkxp-window`, in
+`crates/mkxp-window/src/script_host.rs`. The current window binary still owns
+winit, `EventLoopProxy`, `FrameSync`, `GraphicsState`, and shutdown ordering,
+so an internal module is the honest boundary.
 
 `mkxp-scripts` is also an imprecise name: it could mean script files,
 `Scripts.rxdata` loading, RGSS bytecode, or scripting runtime. When the boundary
@@ -29,7 +29,7 @@ is stable, the more likely crates are:
 
 ## Interface shape
 
-The host should expose a small `ScriptEngine` trait:
+The host exposes a small `ScriptEngine` trait:
 
 ```rust
 trait ScriptEngine: Send + 'static {
@@ -37,13 +37,13 @@ trait ScriptEngine: Send + 'static {
 }
 ```
 
-The demo implementation becomes one engine:
+The demo implementation is one engine:
 
 ```rust
 struct DemoScriptEngine;
 ```
 
-The future Ruby implementation becomes another:
+The future Ruby implementation should become another:
 
 ```rust
 struct RubyScriptEngine;
@@ -113,15 +113,32 @@ returns the fatal error through the binary `anyhow::Result` path after
 This keeps panic, Ruby exception, normal script completion, and shutdown on one
 host-owned path.
 
-## Migration path
+## Current implementation
 
-1. Move the current demo loop into `DemoScriptEngine`.
-2. Add `ScriptContext` and make the demo call `ctx.with_graphics(...)` and
-   `ctx.graphics_update()`.
-3. Move thread spawn/catch/result/event boilerplate into `spawn_script_thread`.
-4. Keep all types private to `mkxp-window` until Ruby bindings need them across
-   crate boundaries.
-5. When audio/fs/input bindings land, promote only stable service handles to
+Implemented in `crates/mkxp-window/src/script_host.rs`:
+
+- `ScriptEngine` owns the script entry point.
+- `ScriptContext` hides `Arc<SharedRuntime>` and
+  `EventLoopProxy<RuntimeEvent>`.
+- `DemoScriptEngine` contains the old demo loop and calls
+  `ctx.with_graphics(...)` plus `ctx.graphics_update()`.
+- `spawn_script_thread` owns thread spawn, panic capture, result recording, and
+  the final `RuntimeEvent::ScriptExited` wakeup.
+
+`App` still owns winit, graphics bootstrap, `SharedRuntime`, `WindowController`,
+and shutdown/drop ordering. It only chooses which engine to spawn:
+
+```rust
+spawn_script_thread(Box::new(DemoScriptEngine), runtime, proxy);
+```
+
+## Remaining migration work
+
+1. Keep all script host types private to `mkxp-window` until Ruby bindings need
+   them across crate boundaries.
+2. Replace `DemoScriptEngine` construction with `RubyScriptEngine::new(...)`
+   when `mkxp-binding` owns the real RGSS runtime.
+3. When audio/fs/input bindings land, promote only stable service handles to
    `mkxp-runtime` or a similarly named crate.
 
 The goal is that replacing the demo with the real script engine changes engine

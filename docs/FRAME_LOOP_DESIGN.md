@@ -84,7 +84,7 @@ App / winit main thread
   owns:
     WindowController
     SharedRuntime
-    demo/script JoinHandle
+    script JoinHandle
 
 SharedRuntime
   owns:
@@ -107,6 +107,7 @@ GraphicsState
     viewport state
 
 script thread
+  runs a ScriptEngine through ScriptContext
   borrows SharedRuntime through Arc
   writes graphics state
   blocks at FrameSync
@@ -223,13 +224,12 @@ present_mode: wgpu::PresentMode::Fifo
 
 ## `Graphics.update` 绑定语义
 
-未来 Ruby 绑定层应把 `Graphics.update` 实现为同步点，而不是直接调用 renderer：
+未来 Ruby 绑定层应把 `Graphics.update` 实现为 `ScriptContext::graphics_update()` 同步点，
+而不是直接调用 renderer：
 
 ```rust
-fn graphics_update(runtime: Arc<SharedRuntime>) -> magnus::Value {
-    if !runtime.frame_sync.script_frame_ready_and_wait(&runtime.shutdown, || {
-        let _ = proxy.send_event(RuntimeEvent::ScriptFrameReady);
-    }) {
+fn graphics_update(ctx: &ScriptContext) -> magnus::Value {
+    if !ctx.graphics_update() {
         // raise/return through the chosen shutdown path
     }
 
@@ -384,7 +384,11 @@ reset 不应绕过 `Graphics.update` 边界直接打断 renderer。
   - `SharedRuntime`
   - `App::render_if_script_ready`
   - `App::schedule_next_wake`
-  - `run_demo_script`
+- `crates/mkxp-window/src/script_host.rs`
+  - `ScriptEngine`
+  - `ScriptContext`
+  - `DemoScriptEngine`
+  - `spawn_script_thread`
 - `crates/mkxp-window/src/window_control.rs`
   - `WindowController`
   - `WindowOutput`
@@ -403,7 +407,7 @@ block until render
 continue next script frame
 ```
 
-因此后续接入 magnus 时，应优先替换 `run_demo_script` 和 binding 层，而不是重写
+因此后续接入 magnus 时，应优先替换 `DemoScriptEngine` 构造和 binding 层，而不是重写
 winit/graphics 的帧循环。
 
 ## 测试策略
