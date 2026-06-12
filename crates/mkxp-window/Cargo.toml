@@ -13,6 +13,7 @@ anyhow = "1"
 mkxp-types = { path = "../mkxp-types" }
 mkxp-log = { path = "../mkxp-log" }
 mkxp-graphics = { path = "../mkxp-graphics" }
+mkxp-config = { path = "../mkxp-config" }
 winit = "0.30"
 wgpu = "24"
 pollster = "0.4"

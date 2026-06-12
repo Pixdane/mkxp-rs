@@ -9,7 +9,7 @@ use winit::event_loop::EventLoopProxy;
 use mkxp_graphics::GraphicsState;
 
 use crate::error::{ScriptError, ScriptExit, ScriptRunResult, panic_payload_to_string};
-use crate::runtime::{RuntimeEvent, SharedRuntime};
+use crate::runtime::{RuntimeConfig, RuntimeEvent, SharedRuntime};
 use crate::window_control::{GAME_H, GAME_W};
 
 pub(crate) trait ScriptEngine: Send + 'static {
@@ -39,6 +39,14 @@ impl ScriptContext {
 
     pub(crate) fn with_graphics<T>(&self, f: impl FnOnce(&mut GraphicsState) -> T) -> T {
         f(&mut self.runtime.graphics.lock().unwrap())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "script engines start reading config in the generic engine/config tasks"
+    )]
+    pub(crate) fn config(&self) -> &RuntimeConfig {
+        &self.runtime.config
     }
 
     pub(crate) fn submit_frame_and_wait(&self) -> ScriptFrameAction {

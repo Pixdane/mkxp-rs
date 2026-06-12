@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use mkxp_graphics::GraphicsState;
@@ -9,6 +9,63 @@ use crate::render_host::RenderError;
 use crate::window_control::{GAME_H, GAME_W};
 
 const DEFAULT_FPS: u32 = 60;
+
+// ── Runtime config ──
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeConfig {
+    pub(crate) window_title: String,
+    pub(crate) window_size: (u32, u32),
+    pub(crate) target_fps: u32,
+    pub(crate) vsync: bool,
+    pub(crate) enable_reset: bool,
+    pub(crate) scripts_path: Option<String>,
+    pub(crate) rgss_version: Option<String>,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            window_title: "mkxp-rs".into(),
+            window_size: (GAME_W, GAME_H),
+            target_fps: DEFAULT_FPS,
+            vsync: true,
+            enable_reset: true,
+            scripts_path: None,
+            rgss_version: None,
+        }
+    }
+}
+
+impl From<mkxp_config::Config> for RuntimeConfig {
+    fn from(config: mkxp_config::Config) -> Self {
+        let mut runtime = Self::default();
+
+        if let Some(title) = config.window.title {
+            runtime.window_title = title;
+        }
+        if let Some((width, height)) = config.window.size
+            && width > 0
+            && height > 0
+        {
+            runtime.window_size = (width as u32, height as u32);
+        }
+        if let Some(frame_rate) = config.graphics.frame_rate {
+            runtime.target_fps = frame_rate.clamp(1, 240);
+        }
+        if let Some(vsync) = config.graphics.vsync {
+            runtime.vsync = vsync;
+        }
+        if let Some(enable_reset) = config.input.enable_reset {
+            runtime.enable_reset = enable_reset;
+        }
+
+        runtime.scripts_path = config.ruby.scripts_path;
+        runtime.rgss_version = config.ruby.rgss_version;
+
+        runtime
+    }
+}
 
 // ── Runtime events ──
 
@@ -53,6 +110,11 @@ impl RenderOutcomeSlot {
 // ── SharedRuntime ──
 
 pub(crate) struct SharedRuntime {
+    #[allow(
+        dead_code,
+        reason = "ScriptContext exposes runtime config before later tasks consume it"
+    )]
+    pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) graphics: Mutex<GraphicsState>,
     pub(crate) frame_sync: FrameSync,
     script_outcome: ScriptOutcomeSlot,
@@ -67,7 +129,25 @@ impl SharedRuntime {
         surface: wgpu::Surface<'static>,
         surface_config: wgpu::SurfaceConfiguration,
     ) -> Self {
+        Self::with_config(
+            device,
+            queue,
+            surface,
+            surface_config,
+            RuntimeConfig::default(),
+        )
+    }
+
+    pub(crate) fn with_config(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: wgpu::Surface<'static>,
+        surface_config: wgpu::SurfaceConfiguration,
+        config: RuntimeConfig,
+    ) -> Self {
+        let config = Arc::new(config);
         Self {
+            config: config.clone(),
             graphics: Mutex::new(GraphicsState::new(
                 device,
                 queue,
@@ -75,7 +155,7 @@ impl SharedRuntime {
                 surface_config,
                 GAME_W,
                 GAME_H,
-                DEFAULT_FPS,
+                config.target_fps,
             )),
             frame_sync: FrameSync::default(),
             script_outcome: ScriptOutcomeSlot::default(),
@@ -112,7 +192,56 @@ mod tests {
     use crate::error::{ScriptError, ScriptExit, panic_payload_to_string};
     use crate::render_host::RenderError;
 
-    use super::{RenderOutcomeSlot, ScriptOutcomeSlot};
+    use super::{RenderOutcomeSlot, RuntimeConfig, ScriptOutcomeSlot};
+
+    #[test]
+    fn runtime_config_default_values_match_demo_defaults() {
+        let config = RuntimeConfig::from(mkxp_config::Config::default());
+
+        assert_eq!(config.window_title, "mkxp-rs");
+        assert_eq!(config.window_size, (640, 480));
+        assert_eq!(config.target_fps, 60);
+        assert!(config.vsync);
+        assert!(config.enable_reset);
+        assert_eq!(config.scripts_path, None);
+        assert_eq!(config.rgss_version, None);
+    }
+
+    #[test]
+    fn runtime_config_uses_mkxp_config_overrides() {
+        let raw = mkxp_config::Config {
+            ruby: mkxp_config::config::Ruby {
+                rgss_version: Some("3".into()),
+                scripts_path: Some("Data/Scripts.rvdata2".into()),
+                ..Default::default()
+            },
+            window: mkxp_config::config::Window {
+                title: Some("Configured Game".into()),
+                size: Some((1280, 960)),
+                ..Default::default()
+            },
+            graphics: mkxp_config::config::Graphics {
+                frame_rate: Some(120),
+                vsync: Some(false),
+                ..Default::default()
+            },
+            input: mkxp_config::config::Input {
+                enable_reset: Some(false),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let config = RuntimeConfig::from(raw);
+
+        assert_eq!(config.window_title, "Configured Game");
+        assert_eq!(config.window_size, (1280, 960));
+        assert_eq!(config.target_fps, 120);
+        assert!(!config.vsync);
+        assert!(!config.enable_reset);
+        assert_eq!(config.scripts_path.as_deref(), Some("Data/Scripts.rvdata2"));
+        assert_eq!(config.rgss_version.as_deref(), Some("3"));
+    }
 
     #[test]
     fn shared_runtime_records_script_success_once() {
