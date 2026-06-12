@@ -8,10 +8,9 @@ use winit::event_loop::EventLoopProxy;
 
 use mkxp_graphics::GraphicsState;
 
+use crate::error::{ScriptError, ScriptExit, ScriptRunResult, panic_payload_to_string};
+use crate::runtime::{RuntimeEvent, SharedRuntime};
 use crate::window_control::{GAME_H, GAME_W};
-use crate::{
-    RuntimeEvent, ScriptError, ScriptExit, ScriptRunResult, SharedRuntime, panic_payload_to_string,
-};
 
 pub(crate) trait ScriptEngine: Send + 'static {
     fn run(self: Box<Self>, ctx: ScriptContext) -> ScriptRunResult;
@@ -19,12 +18,11 @@ pub(crate) trait ScriptEngine: Send + 'static {
 
 pub(crate) struct ScriptContext {
     runtime: Arc<SharedRuntime>,
-    proxy: EventLoopProxy<RuntimeEvent>,
 }
 
 impl ScriptContext {
-    fn new(runtime: Arc<SharedRuntime>, proxy: EventLoopProxy<RuntimeEvent>) -> Self {
-        Self { runtime, proxy }
+    fn new(runtime: Arc<SharedRuntime>) -> Self {
+        Self { runtime }
     }
 
     pub(crate) fn is_shutdown_requested(&self) -> bool {
@@ -38,9 +36,7 @@ impl ScriptContext {
     pub(crate) fn graphics_update(&self) -> bool {
         self.runtime
             .frame_sync
-            .script_frame_ready_and_wait(&self.runtime.shutdown, || {
-                let _ = self.proxy.send_event(RuntimeEvent::ScriptFrameReady);
-            })
+            .script_frame_ready_and_wait(&self.runtime.shutdown)
     }
 }
 
@@ -89,12 +85,10 @@ pub(crate) fn spawn_script_thread(
     proxy: EventLoopProxy<RuntimeEvent>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let ctx = ScriptContext::new(runtime.clone(), proxy.clone());
+        let ctx = ScriptContext::new(runtime.clone());
         let result = catch_script_unwind(|| engine.run(ctx));
         runtime.record_script_result(result);
 
-        // Wake winit even if it is sleeping until the next frame; the main
-        // thread should observe and report script completion promptly.
         let _ = proxy.send_event(RuntimeEvent::ScriptExited);
     })
 }
@@ -109,7 +103,7 @@ fn catch_script_unwind(run: impl FnOnce() -> ScriptRunResult) -> ScriptRunResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ScriptError, ScriptExit};
+    use crate::error::{ScriptError, ScriptExit};
 
     #[test]
     fn catch_script_unwind_preserves_normal_result() {

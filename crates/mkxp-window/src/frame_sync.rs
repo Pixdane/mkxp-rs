@@ -1,0 +1,210 @@
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+/// Outcome of waiting for a script frame on the render side.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) enum FrameWait {
+    /// A frame is ready for rendering, recorded at the given instant.
+    Ready { ready_at: Instant },
+    /// The runtime has been asked to shut down.
+    Shutdown,
+}
+
+#[derive(Default)]
+struct FrameSyncState {
+    ready: bool,
+    ready_at: Option<Instant>,
+}
+
+/// Synchronizes one script-produced frame with one render pass.
+///
+/// The script side sets `ready = true` at the `Graphics.update` boundary and
+/// then blocks. The render side consumes exactly one frame, flips `ready` back
+/// to false, and wakes the script so the next game update can begin.
+#[derive(Default)]
+pub(crate) struct FrameSync {
+    state: Mutex<FrameSyncState>,
+    cv: std::sync::Condvar,
+}
+
+#[allow(dead_code)]
+impl FrameSync {
+    /// Called from the script thread to signal that a frame is ready.
+    ///
+    /// Sets `ready = true`, records the instant, wakes the event loop via
+    /// the internal Condvar, then blocks until the render side calls
+    /// `render_finished()` or shutdown is requested.
+    ///
+    /// The former `wake_event_loop` callback has been removed; the
+    /// render thread waits on a separate Condvar in `wait_for_ready_or_shutdown`.
+    ///
+    /// Returns `true` if the loop should continue (no shutdown observed).
+    pub(crate) fn script_frame_ready_and_wait(&self, shutdown: &AtomicBool) -> bool {
+        let mut state = self.state.lock().unwrap();
+        state.ready = true;
+        state.ready_at = Some(Instant::now());
+        self.cv.notify_one();
+
+        while state.ready && !shutdown.load(Ordering::Acquire) {
+            state = self.cv.wait(state).unwrap();
+        }
+
+        !shutdown.load(Ordering::Acquire)
+    }
+
+    /// Called from the render thread to block until a frame is ready for
+    /// rendering or shutdown is requested.
+    ///
+    /// Returns [`FrameWait::Ready`] when the script has signalled a frame, or
+    /// [`FrameWait::Shutdown`] when the runtime has been asked to shut down.
+    pub(crate) fn wait_for_ready_or_shutdown(&self, shutdown: &AtomicBool) -> FrameWait {
+        let mut state = self.state.lock().unwrap();
+        while !state.ready && !shutdown.load(Ordering::Acquire) {
+            state = self.cv.wait(state).unwrap();
+        }
+
+        if shutdown.load(Ordering::Acquire) {
+            FrameWait::Shutdown
+        } else {
+            let ready_at = state.ready_at.take().unwrap_or_else(Instant::now);
+            FrameWait::Ready { ready_at }
+        }
+    }
+
+    /// Returns `true` when a script frame is ready and waiting for rendering.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.state.lock().unwrap().ready
+    }
+
+    /// Returns the instant the current ready frame was submitted, if any.
+    pub(crate) fn ready_since(&self) -> Option<Instant> {
+        self.state.lock().unwrap().ready_at
+    }
+
+    /// Called from the render side after the frame has been rendered.
+    ///
+    /// Resets `ready` to `false` and wakes the script thread so it can
+    /// begin the next update cycle.
+    pub(crate) fn render_finished(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.ready = false;
+        state.ready_at = None;
+        self.cv.notify_one();
+    }
+
+    /// Wakes all threads waiting on this condvar.
+    ///
+    /// Used during shutdown so blocked script or render threads can observe
+    /// the shutdown flag and exit.
+    pub(crate) fn wake_all(&self) {
+        self.cv.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn blocks_script_until_render_finishes() {
+        let sync = Arc::new(FrameSync::default());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let script_sync = sync.clone();
+        let script_shutdown = shutdown.clone();
+        let handle = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let keep_running = script_sync.script_frame_ready_and_wait(&script_shutdown);
+            done_tx.send(keep_running).unwrap();
+        });
+
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        while !sync.is_ready() {
+            thread::yield_now();
+        }
+        assert!(done_rx.try_recv().is_err());
+
+        sync.render_finished();
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_releases_blocked_script() {
+        let sync = Arc::new(FrameSync::default());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let script_sync = sync.clone();
+        let script_shutdown = shutdown.clone();
+        let handle = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let keep_running = script_sync.script_frame_ready_and_wait(&script_shutdown);
+            done_tx.send(keep_running).unwrap();
+        });
+
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        while !sync.is_ready() {
+            thread::yield_now();
+        }
+
+        shutdown.store(true, Ordering::Release);
+        sync.wake_all();
+        assert!(!done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn wakes_render_waiter_when_script_frame_is_ready() {
+        let sync = Arc::new(FrameSync::default());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (render_wait_tx, render_wait_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let render_sync = sync.clone();
+        let render_shutdown = shutdown.clone();
+        let render_handle = thread::spawn(move || {
+            render_wait_tx
+                .send(render_sync.wait_for_ready_or_shutdown(&render_shutdown))
+                .unwrap();
+        });
+
+        assert!(
+            render_wait_rx
+                .recv_timeout(Duration::from_millis(20))
+                .is_err()
+        );
+
+        let script_sync = sync.clone();
+        let script_shutdown = shutdown.clone();
+        let script_handle = thread::spawn(move || {
+            done_tx
+                .send(script_sync.script_frame_ready_and_wait(&script_shutdown))
+                .unwrap();
+        });
+
+        match render_wait_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+            FrameWait::Ready { ready_at } => {
+                assert!(ready_at <= Instant::now());
+            }
+            FrameWait::Shutdown => panic!("render waiter should observe a ready frame"),
+        }
+
+        assert!(done_rx.recv_timeout(Duration::from_millis(20)).is_err());
+        sync.render_finished();
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+
+        render_handle.join().unwrap();
+        script_handle.join().unwrap();
+    }
+}

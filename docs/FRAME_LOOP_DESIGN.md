@@ -570,21 +570,24 @@ Required test coverage:
 
 ## Current Implementation Status
 
-As of this design rewrite, the code still uses the old winit-main-thread render
-path with diagnostics:
+The render-host migration is implemented in `mkxp-window`:
 
-- `RuntimeEvent::ScriptFrameReady`
-- `App::request_redraw_if_script_ready`
-- `WindowEvent::RedrawRequested -> App::render_if_script_ready`
-- `FrameDiagnostics`
+- `main.rs` is a thin binary entry that declares private modules and calls
+  `app::run()`.
+- `app.rs` owns winit `ApplicationHandler`, wgpu bootstrap, event forwarding,
+  shutdown, and thread joins.
+- `render_host.rs` owns `RenderCommand`, render-thread spawn, render timing,
+  command draining, `GraphicsState::update()`, and render error propagation.
+- `frame_sync.rs` owns the script/render synchronization primitive; the render
+  thread waits on `FrameSync::wait_for_ready_or_shutdown()`.
+- `script_host.rs` no longer sends `RuntimeEvent::ScriptFrameReady` for normal
+  per-frame rendering. The winit user event path is used for script exit.
+- `RuntimeEvent::RenderExited` reports fatal render thread errors back to the
+  winit-owned error path.
 
-These are transitional and should be removed or simplified once render host is
-implemented.
-
-`ScriptHost` is already close to the desired boundary. The main expected change
-is that `ScriptContext::graphics_update()` should no longer need to send a winit
-user event for normal per-frame rendering. It may still send events for script
-exit, fatal errors, or explicit host notifications.
+The old diagnostic path based on `RuntimeEvent::ScriptFrameReady`,
+`request_redraw_if_script_ready`, `RedrawRequested -> render_if_script_ready`,
+and `FrameDiagnostics` has been removed.
 
 ## Verification Strategy
 

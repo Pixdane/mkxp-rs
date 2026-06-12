@@ -15,7 +15,7 @@ cross-platform runtime for RPG Maker XP / VX / VX Ace games.  Licensed GPL-2.0.
 | `mkxp-audio` | `crates/mkxp-audio/` | 40 unit + 12 doc | BGM/BGS/ME/SE + MIDI. kira (mixing) + rustysynth (SoundFont MIDI). Zero C deps. |
 | `mkxp-log` | `crates/mkxp-log/` | 23 unit + 13 doc | tracing-based logger. `MkxpLayer` (ISO 8601 + span lifecycle). EnvFilter, Composite targets, From<&Config>. |
 | `mkxp-graphics` | `crates/mkxp-graphics/` | Unit tests in crate | wgpu renderer, fixed game coordinate system, viewport scale modes. Does not depend on winit. |
-| `mkxp-window` | `crates/mkxp-window/` | 29 unit | Binary crate. `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput` for `App` to apply to graphics. `script_host` provides the internal `ScriptEngine`/`ScriptContext` boundary; the demo engine uses a `FrameSync` script-thread shape matching `FRAME_LOOP_DESIGN.md`, with `ScriptRunResult` propagated through `WindowError` to the winit thread and binary `anyhow` entry. |
+| `mkxp-window` | `crates/mkxp-window/` | 36 unit | Binary crate. `main.rs` is a thin entry; `app.rs` owns winit/wgpu bootstrap and thread lifecycle; `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput`; `render_host.rs` consumes `RenderCommand` on a dedicated render thread and owns frame timing / `GraphicsState::update()`; `script_host.rs` provides the internal `ScriptEngine`/`ScriptContext` boundary and blocks at `FrameSync` without per-frame winit wakeups. |
 
 Next major crate: `mkxp-binding` (magnus Ruby MRI).
 
@@ -267,7 +267,12 @@ direct dependency of `mkxp-log`.  Timestamps use local timezone offset:
 | `docs/CONFIG.en.md` | Configuration reference — env var mapping uses `__` separator |
 | `docs/WINDOW_CONTROLLER_DESIGN.md` | WindowController ownership/output boundary and current implementation status |
 | `crates/mkxp-window/src/window_control.rs` | WindowController — owns window/menu/resize/fullscreen/shortcut state, no wgpu |
-| `crates/mkxp-window/src/main.rs` | Binary host — wgpu bootstrap, event forwarding, `WindowOutput` application, frame timing |
+| `crates/mkxp-window/src/main.rs` | Thin binary entry — declares modules and calls `app::run()` |
+| `crates/mkxp-window/src/app.rs` | winit ApplicationHandler, wgpu bootstrap, WindowOutput → RenderCommand routing, shutdown/thread joins |
+| `crates/mkxp-window/src/render_host.rs` | Dedicated render thread, RenderCommand receiver, FPS gate, GraphicsState update/error propagation |
+| `crates/mkxp-window/src/frame_sync.rs` | Script/render frame barrier; script blocks at Graphics.update, render thread waits on Condvar |
+| `crates/mkxp-window/src/runtime.rs` | SharedRuntime, script/render outcome slots, RuntimeEvent |
+| `crates/mkxp-window/src/error.rs` | WindowError, ScriptError, ScriptExit, panic payload conversion |
 | `crates/mkxp-audio/src/manager.rs` | AudioManager — BGM/BGS/ME/SE + volume layers + ME/BGM interaction |
 | `crates/mkxp-audio/src/midi_stream.rs` | Real-time MIDI streaming via ringbuf + cpal |
 | `crates/mkxp-audio/src/se_cache.rs` | 10MB LRU SE cache (matching mkxp-z SE_CACHE_MEM) |

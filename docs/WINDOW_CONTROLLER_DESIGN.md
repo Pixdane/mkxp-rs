@@ -471,12 +471,15 @@ Runtime 再把命令分发给脚本、文件系统或 debug service。模块不�
   menu items、modifier 状态、宽高比锁定状态、全屏 scale mode 和 resize
   request tracker。
 - `WindowController` 不持有 `GraphicsState`，也不创建 wgpu resource。
-- `App` 当前仍负责 wgpu bootstrap、事件转发、`WindowOutput` 应用、graphics update
-  和 frame timing。这是过渡状态。新的 `FRAME_LOOP_DESIGN.md` 要求 `App` 将
-  `WindowOutput` 转换为 `RenderCommand`，由 render host thread 应用到
-  `GraphicsState` 并执行每帧 render。
-- `App` 在退出时设置 shutdown、唤醒 demo/script 线程并 join，避免后台线程继续
-  持有 `GraphicsState` 到 `WindowController` drop 之后。
+- `App` 负责 wgpu bootstrap、winit 事件转发和生命周期 glue。它把会影响渲染的
+  `WindowOutput` 转换为 `RenderCommand`，不再直接调用 `GraphicsState` 的
+  resize、viewport 或 render 方法。
+- `render_host.rs` 持有 render command receiver 和固定时间轴，负责在 render
+  thread 中应用 `SurfaceResized`、`ViewportScaleModeChanged` 并执行每帧
+  `GraphicsState::update()`。
+- `App` 在退出时设置 shutdown、唤醒 `FrameSync`、发送 `RenderCommand::Shutdown`，
+  并显式 join script/render 线程，避免后台线程继续持有 `GraphicsState` 到
+  `WindowController` drop 之后。
 - `WindowOutput::SurfaceResized` 使用真实窗口尺寸；自动宽高比修正仍是
   controller 内部副作用。
 - `window_mode` 由 `window.fullscreen()` 的平台状态统一同步。Alt+Enter 和
@@ -491,7 +494,8 @@ Runtime 再把命令分发给脚本、文件系统或 debug service。模块不�
 
 1. ✅ 新增 `window_control.rs`，移动纯函数和状态类型。
 2. ✅ 新增 `WindowController`，持有 `Window`、`Menu`、receiver 和 menu items。
-3. ✅ 让 `App` 通过 `WindowOutput` 驱动 `GraphicsState`。
+3. ✅ 让 `App` 将 `WindowOutput` 转换为 `RenderCommand`。
 4. ✅ 保留 wgpu bootstrap 在 `App` 中，通过 `controller.window()` 创建 surface。
-5. 后续按需抽出 `WindowPolicy`/`WindowSideEffect`，覆盖更多无窗口状态机测试。
-6. 后续再考虑 `RuntimeHost`、`RuntimeBuilder` 和菜单贡献系统。
+5. ✅ 新增 render host thread，由它应用 render commands 并执行 frame render。
+6. 后续按需抽出 `WindowPolicy`/`WindowSideEffect`，覆盖更多无窗口状态机测试。
+7. 后续再考虑 `RuntimeHost`、`RuntimeBuilder` 和菜单贡献系统。
