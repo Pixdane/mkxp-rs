@@ -308,6 +308,14 @@ pub fn viewport_for_mode(
             let vpw = game_w * scale;
             let vph = game_h * scale;
             if vpw > window_w || vph > window_h {
+                debug!(
+                    requested_scale = scale,
+                    target_w = vpw,
+                    target_h = vph,
+                    surface_w = window_w,
+                    surface_h = window_h,
+                    "integer viewport does not fit surface; falling back to fit"
+                );
                 return letterbox_viewport(window_w, window_h, game_w, game_h);
             }
             let x = window_w.saturating_sub(vpw) / 2;

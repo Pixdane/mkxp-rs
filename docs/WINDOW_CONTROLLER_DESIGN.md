@@ -175,8 +175,6 @@ enum WindowMenuCommand {
 窗口级快捷键由 `WindowController` 消费：
 
 - `Alt+Enter`：切换全屏
-- `A`：切换宽高比锁定
-- `0`：关闭宽高比锁定，并把全屏 viewport 模式重置为 `Fit`
 
 普通游戏输入不应被窗口控制器解释为窗口命令。未来接入 input service 后，
 窗口控制器可以把未消费的键盘输入作为 runtime input event 输出。

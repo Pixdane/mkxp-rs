@@ -15,6 +15,8 @@ use crate::window_control::{GAME_H, GAME_W, WindowConfig, WindowController, Wind
 const DEFAULT_FPS: u32 = 60;
 
 fn main() {
+    mkxp_log::init(mkxp_log::LogConfig::default()).expect("failed to initialise logger");
+
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop
         .run_app(&mut App::default())

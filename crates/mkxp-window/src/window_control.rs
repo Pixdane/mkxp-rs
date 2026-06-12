@@ -29,6 +29,7 @@ use winit::window::{Fullscreen, Window, WindowAttributes};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
 use mkxp_graphics::ViewportScaleMode;
+use tracing::debug;
 
 // ── Constants ──
 
@@ -553,6 +554,12 @@ impl WindowController {
         );
 
         if sync.mode != self.window_mode {
+            debug!(
+                from = ?self.window_mode,
+                to = ?sync.mode,
+                output = ?sync.output,
+                "window mode synchronized from platform"
+            );
             self.window_mode = sync.mode;
             self.refresh_menu_marks();
         }
@@ -598,28 +605,7 @@ impl WindowController {
             return self.toggle_fullscreen();
         }
 
-        match key {
-            KeyCode::KeyA => {
-                self.aspect_locked = !self.aspect_locked;
-                if should_request_windowed_fit_after_aspect_toggle(
-                    self.aspect_locked,
-                    self.is_fullscreen(),
-                ) {
-                    self.request_windowed_fit(ResizeRequestMode::Explicit);
-                }
-                self.refresh_menu_marks();
-                Vec::new()
-            }
-            KeyCode::Digit0 | KeyCode::Numpad0 => {
-                self.aspect_locked = false;
-                self.fullscreen_scale_mode = FullscreenScaleMode::Fit;
-                self.refresh_menu_marks();
-                vec![WindowOutput::ViewportScaleModeChanged(
-                    ViewportScaleMode::Fit,
-                )]
-            }
-            _ => Vec::new(),
-        }
+        Vec::new()
     }
 
     // ── fullscreen toggle ──
