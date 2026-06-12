@@ -470,7 +470,7 @@ Runtime 再把命令分发给脚本、文件系统或 debug service。模块不�
 
 ## 当前实现状态
 
-当前 `mkxp-window` 仍然是 binary crate。窗口控制边界已经落在
+当前 `mkxp-window` 同时提供 library entry 和 thin binary。窗口控制边界已经落在
 `crates/mkxp-window/src/window_control.rs`：
 
 - `WindowController` 持有 `winit::Window`、`muda::Menu`、menu receiver、

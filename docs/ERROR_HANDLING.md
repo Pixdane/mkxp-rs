@@ -176,7 +176,7 @@ fn main() -> anyhow::Result<()> {
 
 入口层永远不需要 `match` 错误变体。
 
-`mkxp-window` 是 binary crate，但仍然保留一个小型 `WindowError`，用于表达
+`mkxp-window` 现在有 library entry 和 thin binary，但仍然保留一个小型 `WindowError`，用于表达
 winit/wgpu bootstrap 和脚本线程退出这些入口层内部的领域错误。winit
 `ApplicationHandler` 回调本身不能返回 `Result`，所以运行期脚本错误先记录在
 `App` 中，调用 `event_loop.exit()`，等 `run_app()` 返回后再交给

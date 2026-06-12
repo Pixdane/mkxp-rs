@@ -600,9 +600,10 @@ Required test coverage:
 
 The render-host migration is implemented in `mkxp-window`:
 
-- `main.rs` is the current binary entry: it loads `mkxp-config`, initializes
+- `lib.rs` owns the `run_demo()` entry: it loads `mkxp-config`, initializes
   logging from that config, creates the winit event loop, selects
   `App::<DemoScriptEngine>`, and runs `run_app()`.
+- `main.rs` is a thin binary entry that calls `mkxp_window::run_demo()`.
 - `app.rs` owns winit `ApplicationHandler`, wgpu bootstrap, runtime config
   consumption, event forwarding, shutdown, and thread joins. Runtime config now
   drives window title/size, target FPS, vsync present mode, and reset enablement.

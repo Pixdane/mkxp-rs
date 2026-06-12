@@ -139,8 +139,8 @@ Implemented in `crates/mkxp-window/src/script_host.rs`:
   the final `RuntimeEvent::ScriptExited` wakeup.
 
 `App<E>` still owns winit, graphics bootstrap, `SharedRuntime`,
-`WindowController`, and shutdown/drop ordering. The binary selects the engine
-type at startup:
+`WindowController`, and shutdown/drop ordering. The library entry selects the
+engine type at startup:
 
 ```rust
 let mut app = App::<DemoScriptEngine>::new(proxy, runtime_config);

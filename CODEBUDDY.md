@@ -15,7 +15,7 @@ cross-platform runtime for RPG Maker XP / VX / VX Ace games.  Licensed GPL-2.0.
 | `mkxp-audio` | `crates/mkxp-audio/` | 40 unit + 12 doc | BGM/BGS/ME/SE + MIDI. kira (mixing) + rustysynth (SoundFont MIDI). Zero C deps. |
 | `mkxp-log` | `crates/mkxp-log/` | 23 unit + 13 doc | tracing-based logger. `MkxpLayer` (ISO 8601 + span lifecycle). EnvFilter, Composite targets, From<&Config>. |
 | `mkxp-graphics` | `crates/mkxp-graphics/` | 10 unit | wgpu renderer, fixed game coordinate system, viewport scale modes, temporary demo-state reset API. Does not depend on winit. |
-| `mkxp-window` | `crates/mkxp-window/` | 48 unit | Binary crate. `main.rs` loads config/logging and runs `App::<DemoScriptEngine>`; `app.rs` owns winit/wgpu bootstrap, runtime config consumption, restart/shutdown, and thread lifecycle logging; `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput`; `render_host.rs` consumes `RenderCommand` on a dedicated render thread and owns frame timing / `GraphicsState::update()`; `script_host.rs` provides the internal `ScriptEngine`/`ScriptContext` boundary and blocks at `FrameSync` without per-frame winit wakeups. |
+| `mkxp-window` | `crates/mkxp-window/` | 48 unit | Library entry plus thin binary. `lib.rs` exposes `run_demo()` and owns config/logging/event-loop startup; `main.rs` only calls it; `app.rs` owns winit/wgpu bootstrap, runtime config consumption, restart/shutdown, and thread lifecycle logging; `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput`; `render_host.rs` consumes `RenderCommand` on a dedicated render thread and owns frame timing / `GraphicsState::update()`; `script_host.rs` provides the internal `ScriptEngine`/`ScriptContext` boundary and blocks at `FrameSync` without per-frame winit wakeups. |
 
 Next major crate: `mkxp-binding` (magnus Ruby MRI).
 
@@ -267,7 +267,8 @@ direct dependency of `mkxp-log`.  Timestamps use local timezone offset:
 | `docs/CONFIG.en.md` | Configuration reference — env var mapping uses `__` separator |
 | `docs/WINDOW_CONTROLLER_DESIGN.md` | WindowController ownership/output boundary and current implementation status |
 | `crates/mkxp-window/src/window_control.rs` | WindowController — owns window/menu/resize/fullscreen/shortcut state, no wgpu |
-| `crates/mkxp-window/src/main.rs` | Binary entry — loads mkxp-config, initializes mkxp-log, creates winit event loop, selects `App::<DemoScriptEngine>` |
+| `crates/mkxp-window/src/lib.rs` | Library entry — exposes `run_demo()`, loads mkxp-config, initializes mkxp-log, creates winit event loop, selects `App::<DemoScriptEngine>` |
+| `crates/mkxp-window/src/main.rs` | Thin binary entry — calls `mkxp_window::run_demo()` |
 | `crates/mkxp-window/src/app.rs` | winit ApplicationHandler, wgpu bootstrap, RuntimeConfig consumption, WindowOutput → RenderCommand routing, restart/shutdown/thread joins |
 | `crates/mkxp-window/src/render_host.rs` | Dedicated render thread, RenderCommand receiver, FPS gate, GraphicsState update/error propagation |
 | `crates/mkxp-window/src/frame_sync.rs` | Script/render frame barrier; script blocks at Graphics.update, render thread waits on Condvar |
