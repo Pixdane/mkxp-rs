@@ -32,6 +32,8 @@ mkxp-rs 当前使用：
 
 wgpu surface 从 `WindowController::window()` 创建，但 `WindowController` 不持有
 wgpu 资源。`GraphicsState` 放在 `SharedRuntime` 中，并由 render thread 使用。
+逻辑游戏尺寸来自 `graphics.game_size` / `--game-size` 进入的
+`RuntimeConfig.game_size`；初始窗口尺寸来自 `window.size` / `--window-size`。
 
 ## 窗口事件
 

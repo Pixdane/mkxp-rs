@@ -130,9 +130,11 @@ WindowController {
 - modifier key状态
 - 全屏和宽高比修正规则
 - reset/restart 菜单启用状态
+- 从 `RuntimeConfig.game_size` 传入的逻辑游戏尺寸
 
 纯策略 helper，例如 `fit_aspect_size`、`window_scale_mark`、`classify_resize`
 和 `ResizeRequestTracker`，必须能用普通单元测试覆盖，不依赖真实窗口或菜单。
+这些 helper 必须接收 `game_size` 参数，不应读取窗口模块内的全局游戏尺寸常量。
 
 ## 输入
 

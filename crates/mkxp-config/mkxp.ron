@@ -22,8 +22,7 @@
     window: (
         # Window title. Empty string uses the Game.ini Title field.
         title: "",
-        # Logical resolution (Graphics.width / Graphics.height).
-        # (0, 0) uses the RGSS-version default (XP: 640x480, VX/Ace: 544x416).
+        # Initial window size.
         size: (640, 480),
         # Start in fullscreen mode. Can still be toggled with Alt+Enter at runtime.
         fullscreen: false,
@@ -44,8 +43,11 @@
         # Unlike vsync, this also reports the true frame rate back to Ruby scripts
         # so timers stay accurate. Disabled if the refresh rate cannot be detected.
         sync_to_refresh_rate: false,
-        # Frame rate cap (0 = uncapped)
-        frame_rate: 0,
+        # Frame rate cap. 0 disables the render-host FPS gate.
+        frame_rate: 60,
+        # Logical resolution (Graphics.width / Graphics.height).
+        # (0, 0) uses the RGSS-version default (XP: 640x480, VX/Ace: 544x416).
+        game_size: (640, 480),
 
         # ---- Scaling ----
         # Primary scaling algorithm, applied to screen upscale, downscale, and bitmap scaling.

@@ -9,7 +9,8 @@
 窗口层负责窗口尺寸、菜单命令、全屏状态和宽高比约束。渲染层负责把固定游戏画面
 放进当前 surface。
 
-游戏基准尺寸当前为 `640x480`，宽高比为 `4:3`。
+游戏逻辑尺寸来自启动时解析出的 `RuntimeConfig.game_size`，默认值为 `640x480`。
+窗口约束和整数倍缩放都使用这个配置值，而不是窗口模块内的全局常量。
 
 ## 核心状态
 
@@ -37,9 +38,9 @@ enum FullscreenScaleMode {
 
 | 操作 | 窗口模式 | 全屏模式 |
 |---|---|---|
-| `Lock Aspect Ratio` | 切换 `aspect_locked`；开启时立即 fit 当前窗口到 `4:3` | 只切换状态，不约束全屏 surface |
-| `Fit` | 一次性请求窗口调整到当前尺寸附近的无黑边 `4:3` 尺寸 | 设置 `FullscreenScaleMode::Fit` |
-| `1x`-`4x` | 一次性请求窗口调整到 `640x480 * n` | 设置 `FullscreenScaleMode::Integer(n)` |
+| `Lock Aspect Ratio` | 切换 `aspect_locked`；开启时立即 fit 当前窗口到 `game_size` 宽高比 | 只切换状态，不约束全屏 surface |
+| `Fit` | 一次性请求窗口调整到当前尺寸附近的无黑边 `game_size` 宽高比尺寸 | 设置 `FullscreenScaleMode::Fit` |
+| `1x`-`4x` | 一次性请求窗口调整到 `game_size * n` | 设置 `FullscreenScaleMode::Integer(n)` |
 | `Alt+Enter` | 进入 borderless fullscreen | 退出全屏 |
 | `F12` | reset 启用时请求脚本 restart | 同左 |
 | `Game > Restart` | reset 启用时请求脚本 restart | 同左 |
@@ -52,8 +53,8 @@ enum FullscreenScaleMode {
 800x700  -> 800x600
 ```
 
-全屏模式的 `Fit` 复用渲染层 letterbox 行为：保持 `4:3`、完整显示、居中、剩余区域
-为黑边。不 stretch、不 cover、不裁切。
+全屏模式的 `Fit` 复用渲染层 letterbox 行为：保持 `game_size` 宽高比、完整显示、
+居中、剩余区域为黑边。不 stretch、不 cover、不裁切。
 
 ## 手动拖窗口
 
@@ -120,7 +121,7 @@ controller 会再次发 `Coalesced` 修正。
 
 - `Lock Aspect Ratio`：`aspect_locked == true` 时勾选。
 - `Fit`：始终不勾选，因为它是命令，不是状态。
-- `1x`-`4x`：当前窗口真实尺寸正好等于 `640x480 * n` 时勾选对应项。
+- `1x`-`4x`：当前窗口真实尺寸正好等于 `game_size * n` 时勾选对应项。
 - 其他窗口尺寸：`1x`-`4x` 全不勾选。
 
 全屏模式下：
@@ -142,19 +143,19 @@ enum ViewportScaleMode {
 }
 ```
 
-- `Fit`：保持 `4:3`，在 surface 内完整显示并居中。
-- `Integer(n)`：优先使用 `n * 640` 和 `n * 480` 的 viewport；如果 surface 小于目标
+- `Fit`：保持 `game_size` 宽高比，在 surface 内完整显示并居中。
+- `Integer(n)`：优先使用 `n * game_size.w` 和 `n * game_size.h` 的 viewport；如果 surface 小于目标
   viewport，则降级到 `Fit`，确保 viewport 不越界。
 
-窗口模式菜单 `Fit` 会调整窗口本身到无黑边 `4:3` 尺寸，所以 graphics 仍可保持
-`ViewportScaleMode::Fit`。全屏菜单 `Fit` 不改变显示器尺寸，只改变 viewport
-计算策略。
+窗口模式菜单 `Fit` 会调整窗口本身到无黑边的 `game_size` 宽高比尺寸，所以 graphics
+仍可保持 `ViewportScaleMode::Fit`。全屏菜单 `Fit` 不改变显示器尺寸，只改变
+viewport 计算策略。
 
 ## 约束函数
 
 ```text
-fit_aspect_size(w, h):
-  target = 640 / 480
+fit_aspect_size(w, h, game_w, game_h):
+  target = game_w / game_h
   if w / h > target:
     return (round(h * target), h)
   else:
@@ -162,14 +163,14 @@ fit_aspect_size(w, h):
 ```
 
 ```text
-integer_size(n):
-  return (640 * n, 480 * n)
+integer_size(n, game_w, game_h):
+  return (game_w * n, game_h * n)
 ```
 
 ```text
-window_scale_mark(w, h):
-  if w % 640 == 0 and h % 480 == 0 and w / 640 == h / 480:
-    n = w / 640
+window_scale_mark(w, h, game_w, game_h):
+  if w % game_w == 0 and h % game_h == 0 and w / game_w == h / game_h:
+    n = w / game_w
     if 1 <= n <= 4:
       return Integer(n)
   return None

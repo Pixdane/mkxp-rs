@@ -21,9 +21,13 @@ struct Cli {
     #[arg(long)]
     window_title: Option<String>,
 
-    /// Logical resolution (WxH, e.g. 640x480)
+    /// Initial window size (WxH, e.g. 1280x960)
     #[arg(long)]
     window_size: Option<String>,
+
+    /// Logical game resolution (WxH, e.g. 640x480)
+    #[arg(long)]
+    game_size: Option<String>,
 
     /// Start in fullscreen mode
     #[arg(long)]
@@ -113,6 +117,7 @@ impl From<Cli> for Config {
             graphics: crate::config::Graphics {
                 vsync: if cli.no_vsync { Some(false) } else { None },
                 frame_rate: cli.frame_rate,
+                game_size: parse_size(&cli.game_size),
                 scale_mode: cli.scale_mode,
                 ..Default::default()
             },
@@ -124,7 +129,11 @@ impl From<Cli> for Config {
                 scale: cli.font_scale,
                 hinting: cli.font_hinting,
                 kerning: if cli.no_kerning { Some(false) } else { None },
-                outline_crop: if cli.no_outline_crop { Some(false) } else { None },
+                outline_crop: if cli.no_outline_crop {
+                    Some(false)
+                } else {
+                    None
+                },
                 ..Default::default()
             },
             audio: crate::config::Audio {
@@ -140,7 +149,7 @@ impl From<Cli> for Config {
                 show_fps: cli.show_fps,
                 log_level: cli.log_level,
             },
-            ..Default::default()
+            ..Config::empty()
         }
     }
 }
@@ -165,28 +174,50 @@ mod tests {
     fn parse_basic_args() {
         let args = vec![
             "mkxp-rs".into(),
-            "--rgss-version".into(), "2".into(),
+            "--rgss-version".into(),
+            "2".into(),
             "--fullscreen".into(),
-            "--frame-rate".into(), "30".into(),
-            "--window-size".into(), "640x480".into(),
+            "--frame-rate".into(),
+            "30".into(),
+            "--window-size".into(),
+            "640x480".into(),
+            "--game-size".into(),
+            "320x240".into(),
         ];
         let cfg = parse(&args).unwrap();
         assert_eq!(cfg.ruby.rgss_version, Some("2".into()));
         assert_eq!(cfg.window.fullscreen, Some(true));
         assert_eq!(cfg.graphics.frame_rate, Some(30));
         assert_eq!(cfg.window.size, Some((640, 480)));
+        assert_eq!(cfg.graphics.game_size, Some((320, 240)));
     }
 
     #[test]
     fn no_args_gives_empty_config() {
         let cfg = Config::from(Cli {
-            rgss_version: None, custom_script: None, game_folder: None,
-            window_title: None, window_size: None, fullscreen: false,
-            no_resizable: false, scale_mode: None, no_vsync: false,
-            frame_rate: None, font_scale: None, font_hinting: None,
-            no_kerning: false, no_outline_crop: false, master_volume: None,
-            bgm_volume: None, se_volume: None,
-            midi_soundfont: None, log_level: None, debug: false, console: false, show_fps: None,
+            rgss_version: None,
+            custom_script: None,
+            game_folder: None,
+            window_title: None,
+            window_size: None,
+            game_size: None,
+            fullscreen: false,
+            no_resizable: false,
+            scale_mode: None,
+            no_vsync: false,
+            frame_rate: None,
+            font_scale: None,
+            font_hinting: None,
+            no_kerning: false,
+            no_outline_crop: false,
+            master_volume: None,
+            bgm_volume: None,
+            se_volume: None,
+            midi_soundfont: None,
+            log_level: None,
+            debug: false,
+            console: false,
+            show_fps: None,
         });
         assert!(cfg.ruby.rgss_version.is_none());
         assert!(cfg.window.size.is_none());

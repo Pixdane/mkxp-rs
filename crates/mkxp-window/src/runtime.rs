@@ -13,9 +13,6 @@ use mkxp_graphics::GraphicsState;
 use crate::error::ScriptRunResult;
 use crate::frame_sync::FrameSync;
 use crate::render_host::RenderError;
-use crate::window_control::{GAME_H, GAME_W};
-
-const DEFAULT_FPS: u32 = 60;
 
 // ── Runtime config ──
 
@@ -29,6 +26,7 @@ const DEFAULT_FPS: u32 = 60;
 pub(crate) struct RuntimeConfig {
     pub(crate) window_title: String,
     pub(crate) window_size: (u32, u32),
+    pub(crate) game_size: (u32, u32),
     pub(crate) target_fps: u32,
     pub(crate) vsync: bool,
     pub(crate) enable_reset: bool,
@@ -38,45 +36,42 @@ pub(crate) struct RuntimeConfig {
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
-        Self {
-            window_title: "mkxp-rs".into(),
-            window_size: (GAME_W, GAME_H),
-            target_fps: DEFAULT_FPS,
-            vsync: true,
-            enable_reset: true,
-            scripts_path: None,
-            rgss_version: None,
-        }
+        Self::from(mkxp_config::Config::default())
     }
 }
 
 impl From<mkxp_config::Config> for RuntimeConfig {
     fn from(config: mkxp_config::Config) -> Self {
-        let mut runtime = Self::default();
+        let mut config = config;
+        config.fill_defaults();
+        let defaults = mkxp_config::Config::default();
 
-        if let Some(title) = config.window.title {
-            runtime.window_title = title;
+        Self {
+            window_title: config.window.title.unwrap_or_default(),
+            window_size: positive_size(config.window.size, defaults.window.size),
+            game_size: positive_size(config.graphics.game_size, defaults.graphics.game_size),
+            target_fps: normalize_frame_rate(config.graphics.frame_rate.unwrap_or_default()),
+            vsync: config.graphics.vsync.unwrap_or(false),
+            enable_reset: config.input.enable_reset.unwrap_or(true),
+            scripts_path: config.ruby.scripts_path,
+            rgss_version: config.ruby.rgss_version,
         }
-        if let Some((width, height)) = config.window.size
-            && width > 0
-            && height > 0
-        {
-            runtime.window_size = (width as u32, height as u32);
-        }
-        if let Some(frame_rate) = config.graphics.frame_rate {
-            runtime.target_fps = frame_rate.clamp(1, 240);
-        }
-        if let Some(vsync) = config.graphics.vsync {
-            runtime.vsync = vsync;
-        }
-        if let Some(enable_reset) = config.input.enable_reset {
-            runtime.enable_reset = enable_reset;
-        }
+    }
+}
 
-        runtime.scripts_path = config.ruby.scripts_path;
-        runtime.rgss_version = config.ruby.rgss_version;
+fn positive_size(value: Option<(i32, i32)>, fallback: Option<(i32, i32)>) -> (u32, u32) {
+    let (width, height) = value
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .or(fallback)
+        .expect("reference defaults must include a positive size");
+    (width as u32, height as u32)
+}
 
-        runtime
+fn normalize_frame_rate(frame_rate: u32) -> u32 {
+    if frame_rate == 0 {
+        0
+    } else {
+        frame_rate.clamp(1, 240)
     }
 }
 
@@ -198,8 +193,8 @@ impl SharedRuntime {
                 queue,
                 surface,
                 surface_config,
-                GAME_W,
-                GAME_H,
+                config.game_size.0,
+                config.game_size.1,
                 config.target_fps,
             )),
             frame_sync: FrameSync::default(),
@@ -252,13 +247,14 @@ mod tests {
     fn runtime_config_default_values_match_demo_defaults() {
         let config = RuntimeConfig::from(mkxp_config::Config::default());
 
-        assert_eq!(config.window_title, "mkxp-rs");
+        assert_eq!(config.window_title, "");
         assert_eq!(config.window_size, (640, 480));
+        assert_eq!(config.game_size, (640, 480));
         assert_eq!(config.target_fps, 60);
-        assert!(config.vsync);
+        assert!(!config.vsync);
         assert!(config.enable_reset);
         assert_eq!(config.scripts_path, None);
-        assert_eq!(config.rgss_version, None);
+        assert_eq!(config.rgss_version.as_deref(), Some("3"));
     }
 
     #[test]
@@ -276,6 +272,7 @@ mod tests {
             },
             graphics: mkxp_config::config::Graphics {
                 frame_rate: Some(120),
+                game_size: Some((320, 240)),
                 vsync: Some(false),
                 ..Default::default()
             },
@@ -283,18 +280,49 @@ mod tests {
                 enable_reset: Some(false),
                 ..Default::default()
             },
-            ..Default::default()
+            ..mkxp_config::Config::empty()
         };
 
         let config = RuntimeConfig::from(raw);
 
         assert_eq!(config.window_title, "Configured Game");
         assert_eq!(config.window_size, (1280, 960));
+        assert_eq!(config.game_size, (320, 240));
         assert_eq!(config.target_fps, 120);
         assert!(!config.vsync);
         assert!(!config.enable_reset);
         assert_eq!(config.scripts_path.as_deref(), Some("Data/Scripts.rvdata2"));
         assert_eq!(config.rgss_version.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn runtime_config_keeps_zero_frame_rate_uncapped() {
+        let raw = mkxp_config::Config {
+            graphics: mkxp_config::config::Graphics {
+                frame_rate: Some(0),
+                ..Default::default()
+            },
+            ..mkxp_config::Config::empty()
+        };
+
+        let config = RuntimeConfig::from(raw);
+
+        assert_eq!(config.target_fps, 0);
+    }
+
+    #[test]
+    fn runtime_config_clamps_nonzero_frame_rate() {
+        let raw = mkxp_config::Config {
+            graphics: mkxp_config::config::Graphics {
+                frame_rate: Some(500),
+                ..Default::default()
+            },
+            ..mkxp_config::Config::empty()
+        };
+
+        let config = RuntimeConfig::from(raw);
+
+        assert_eq!(config.target_fps, 240);
     }
 
     #[test]

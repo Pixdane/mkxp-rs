@@ -35,12 +35,6 @@ use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu
 use mkxp_graphics::ViewportScaleMode;
 use tracing::debug;
 
-// ── Constants ──
-
-/// Default game logical width.
-pub(crate) const GAME_W: u32 = 640;
-/// Default game logical height.
-pub(crate) const GAME_H: u32 = 480;
 const RESIZE_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
 
 // ── Public configuration ──
@@ -52,6 +46,8 @@ pub(crate) struct WindowConfig {
     pub title: String,
     /// Initial window inner size in physical pixels.
     pub inner_size: (u32, u32),
+    /// Logical game size used for aspect ratio and integer-scale commands.
+    pub game_size: (u32, u32),
     /// Whether the window is resizable by the user.
     pub resizable: bool,
     /// Whether restart/reset commands are enabled.
@@ -61,8 +57,9 @@ pub(crate) struct WindowConfig {
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
-            title: "mkxp-rs".into(),
-            inner_size: (GAME_W, GAME_H),
+            title: String::new(),
+            inner_size: (640, 480),
+            game_size: (640, 480),
             resizable: true,
             enable_reset: true,
         }
@@ -144,7 +141,7 @@ pub(crate) enum ResizeDecision {
 /// Describes what integer scale the current window size represents, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowScaleMark {
-    /// The window is exactly `n × GAME_W` by `n × GAME_H`.
+    /// The window is exactly `n × game_width` by `n × game_height`.
     Integer(u32),
 }
 
@@ -253,15 +250,22 @@ struct MenuItems {
 
 // ── Pure helpers (tests can use these without platform) ──
 
-/// Compute the largest 4:3 inner size that fits within `(w, h)`.
+/// Compute the largest game-aspect inner size that fits within `(w, h)`.
 ///
 /// This helper is intentionally pure so the resize policy can be tested without
 /// creating a platform window.
-pub(crate) fn fit_aspect_size(w: u32, h: u32) -> (u32, u32) {
-    if (w as u64) * 3 > (h as u64) * 4 {
-        (((h as f64 * 4.0 / 3.0).round()) as u32, h)
+pub(crate) fn fit_aspect_size(w: u32, h: u32, game_size: (u32, u32)) -> (u32, u32) {
+    let (game_w, game_h) = game_size;
+    if (w as u64) * (game_h as u64) > (h as u64) * (game_w as u64) {
+        (
+            ((h as f64 * game_w as f64 / game_h as f64).round()) as u32,
+            h,
+        )
     } else {
-        (w, ((w as f64 * 3.0 / 4.0).round()) as u32)
+        (
+            w,
+            ((w as f64 * game_h as f64 / game_w as f64).round()) as u32,
+        )
     }
 }
 
@@ -269,13 +273,14 @@ pub(crate) fn fit_aspect_size(w: u32, h: u32) -> (u32, u32) {
 /// integer scale.
 ///
 /// The menu checkmark reflects actual window size, not the last clicked command.
-pub(crate) fn window_scale_mark(w: u32, h: u32) -> Option<WindowScaleMark> {
-    if w == 0 || h == 0 {
+pub(crate) fn window_scale_mark(w: u32, h: u32, game_size: (u32, u32)) -> Option<WindowScaleMark> {
+    let (game_w, game_h) = game_size;
+    if w == 0 || h == 0 || game_w == 0 || game_h == 0 {
         return None;
     }
 
-    if w.is_multiple_of(GAME_W) && h.is_multiple_of(GAME_H) && w / GAME_W == h / GAME_H {
-        let n = w / GAME_W;
+    if w.is_multiple_of(game_w) && h.is_multiple_of(game_h) && w / game_w == h / game_h {
+        let n = w / game_w;
         if (1..=4).contains(&n) {
             return Some(WindowScaleMark::Integer(n));
         }
@@ -284,8 +289,8 @@ pub(crate) fn window_scale_mark(w: u32, h: u32) -> Option<WindowScaleMark> {
 }
 
 /// Return the pixel size for `n` times the game resolution.
-fn integer_size(n: u32) -> (u32, u32) {
-    (GAME_W * n, GAME_H * n)
+fn integer_size(n: u32, game_size: (u32, u32)) -> (u32, u32) {
+    (game_size.0 * n, game_size.1 * n)
 }
 
 /// Classify a resize event: does it need aspect-ratio correction?
@@ -298,11 +303,12 @@ pub(crate) fn classify_resize(
     h: u32,
     is_fullscreen: bool,
     aspect_locked: bool,
+    game_size: (u32, u32),
 ) -> ResizeDecision {
     if is_fullscreen || !aspect_locked {
         return ResizeDecision::Proceed;
     }
-    let c = fit_aspect_size(w, h);
+    let c = fit_aspect_size(w, h, game_size);
     if c != (w, h) {
         ResizeDecision::NeedsCorrection
     } else {
@@ -323,6 +329,7 @@ fn menu_marks(
     fullscreen_scale_mode: FullscreenScaleMode,
     aspect_locked: bool,
     inner_size: PhysicalSize<u32>,
+    game_size: (u32, u32),
 ) -> MenuMarks {
     let (fit, int_n) = match window_mode {
         WindowMode::Fullscreen => match fullscreen_scale_mode {
@@ -330,7 +337,7 @@ fn menu_marks(
             FullscreenScaleMode::Integer(n) => (false, n),
         },
         WindowMode::Windowed => {
-            let int_n = match window_scale_mark(inner_size.width, inner_size.height) {
+            let int_n = match window_scale_mark(inner_size.width, inner_size.height, game_size) {
                 Some(WindowScaleMark::Integer(n)) => n,
                 _ => 0,
             };
@@ -412,6 +419,7 @@ pub(crate) struct WindowController {
     resize_requests: ResizeRequestTracker,
     modifiers: ModifiersState,
     enable_reset: bool,
+    game_size: (u32, u32),
 }
 
 impl WindowController {
@@ -455,6 +463,7 @@ impl WindowController {
             resize_requests: ResizeRequestTracker::default(),
             modifiers: ModifiersState::default(),
             enable_reset: config.enable_reset,
+            game_size: config.game_size,
         })
     }
 
@@ -523,7 +532,7 @@ impl WindowController {
         // and the pending request has timed out.
         if self.aspect_locked && !self.is_fullscreen() {
             let size = self.window.inner_size();
-            let c = fit_aspect_size(size.width, size.height);
+            let c = fit_aspect_size(size.width, size.height, self.game_size);
             if c != (size.width, size.height) {
                 self.request_single_resize(c, ResizeRequestMode::Coalesced);
                 self.refresh_menu_marks();
@@ -544,10 +553,10 @@ impl WindowController {
         let menu = Menu::new();
 
         let fit = CheckMenuItem::with_id("fit", "Fit", true, false, None);
-        let scale_1x = CheckMenuItem::with_id("scale_1x", "1x (640\u{d7}480)", true, false, None);
-        let scale_2x = CheckMenuItem::with_id("scale_2x", "2x (1280\u{d7}960)", true, false, None);
-        let scale_3x = CheckMenuItem::with_id("scale_3x", "3x (1920\u{d7}1440)", true, false, None);
-        let scale_4x = CheckMenuItem::with_id("scale_4x", "4x (2560\u{d7}1920)", true, false, None);
+        let scale_1x = CheckMenuItem::with_id("scale_1x", "1x", true, false, None);
+        let scale_2x = CheckMenuItem::with_id("scale_2x", "2x", true, false, None);
+        let scale_3x = CheckMenuItem::with_id("scale_3x", "3x", true, false, None);
+        let scale_4x = CheckMenuItem::with_id("scale_4x", "4x", true, false, None);
         let lock_aspect =
             CheckMenuItem::with_id("lock_aspect", "Lock Aspect Ratio", true, false, None);
         let restart = MenuItem::with_id("restart", "Restart", enable_reset, None);
@@ -629,9 +638,15 @@ impl WindowController {
     fn handle_resized(&mut self, w: u32, h: u32) -> Vec<WindowOutput> {
         self.resize_requests.observe_resized((w, h));
 
-        let decision = classify_resize(w, h, self.is_fullscreen(), self.aspect_locked);
+        let decision = classify_resize(
+            w,
+            h,
+            self.is_fullscreen(),
+            self.aspect_locked,
+            self.game_size,
+        );
         if decision == ResizeDecision::NeedsCorrection {
-            let c = fit_aspect_size(w, h);
+            let c = fit_aspect_size(w, h, self.game_size);
             self.request_single_resize(c, ResizeRequestMode::Coalesced);
         }
 
@@ -692,7 +707,10 @@ impl WindowController {
                 ViewportScaleMode::Integer(n),
             )]
         } else {
-            self.request_single_resize(integer_size(n), ResizeRequestMode::Explicit);
+            self.request_single_resize(
+                integer_size(n, self.game_size),
+                ResizeRequestMode::Explicit,
+            );
             Vec::new()
         };
         self.refresh_menu_marks();
@@ -711,7 +729,7 @@ impl WindowController {
 
     fn request_windowed_fit(&mut self, mode: ResizeRequestMode) {
         let size = self.window.inner_size();
-        let c = fit_aspect_size(size.width, size.height);
+        let c = fit_aspect_size(size.width, size.height, self.game_size);
         if c != (size.width, size.height) {
             self.request_single_resize(c, mode);
         }
@@ -725,6 +743,7 @@ impl WindowController {
             self.fullscreen_scale_mode,
             self.aspect_locked,
             self.window.inner_size(),
+            self.game_size,
         );
 
         self.menu_items.fit.set_checked(marks.fit);
@@ -746,16 +765,24 @@ impl WindowController {
 mod tests {
     use super::*;
 
+    const TEST_GAME_SIZE: (u32, u32) = (640, 480);
+
     // ── fit_aspect_size ──
 
     #[test]
     fn fit_aspect_size_shrinks_width_for_wide_window() {
-        assert_eq!(fit_aspect_size(1000, 700), (933, 700));
+        assert_eq!(fit_aspect_size(1000, 700, TEST_GAME_SIZE), (933, 700));
     }
 
     #[test]
     fn fit_aspect_size_shrinks_height_for_tall_window() {
-        assert_eq!(fit_aspect_size(800, 700), (800, 600));
+        assert_eq!(fit_aspect_size(800, 700, TEST_GAME_SIZE), (800, 600));
+    }
+
+    #[test]
+    fn fit_aspect_size_uses_configured_game_aspect() {
+        assert_eq!(fit_aspect_size(1000, 700, (320, 240)), (933, 700));
+        assert_eq!(fit_aspect_size(1000, 700, (16, 9)), (1000, 563));
     }
 
     // ── window_scale_mark ──
@@ -763,26 +790,36 @@ mod tests {
     #[test]
     fn window_scale_mark_detects_integer_scale() {
         assert_eq!(
-            window_scale_mark(1280, 960),
+            window_scale_mark(1280, 960, TEST_GAME_SIZE),
             Some(WindowScaleMark::Integer(2))
         );
     }
 
     #[test]
     fn window_scale_mark_does_not_treat_fit_as_windowed_state() {
-        assert_eq!(window_scale_mark(933, 700), None);
+        assert_eq!(window_scale_mark(933, 700, TEST_GAME_SIZE), None);
     }
 
     #[test]
     fn window_scale_mark_clears_when_aspect_does_not_match() {
-        assert_eq!(window_scale_mark(1000, 700), None);
+        assert_eq!(window_scale_mark(1000, 700, TEST_GAME_SIZE), None);
+    }
+
+    #[test]
+    fn window_scale_mark_uses_configured_game_size() {
+        assert_eq!(
+            window_scale_mark(960, 720, (320, 240)),
+            Some(WindowScaleMark::Integer(3))
+        );
     }
 
     #[test]
     fn window_scale_mark_ignores_zero_size() {
-        assert_eq!(window_scale_mark(0, 0), None);
-        assert_eq!(window_scale_mark(640, 0), None);
-        assert_eq!(window_scale_mark(0, 480), None);
+        assert_eq!(window_scale_mark(0, 0, TEST_GAME_SIZE), None);
+        assert_eq!(window_scale_mark(640, 0, TEST_GAME_SIZE), None);
+        assert_eq!(window_scale_mark(0, 480, TEST_GAME_SIZE), None);
+        assert_eq!(window_scale_mark(640, 480, (0, 480)), None);
+        assert_eq!(window_scale_mark(640, 480, (640, 0)), None);
     }
 
     // ── ResizeRequestTracker ──
@@ -861,7 +898,7 @@ mod tests {
     #[test]
     fn classify_resize_needs_correction_when_aspect_locked_and_off_ratio() {
         assert_eq!(
-            classify_resize(1100, 800, false, true),
+            classify_resize(1100, 800, false, true, TEST_GAME_SIZE),
             ResizeDecision::NeedsCorrection
         );
     }
@@ -870,10 +907,11 @@ mod tests {
     fn classify_resize_proceeds_when_aspect_locked_and_on_ratio() {
         assert_eq!(
             classify_resize(
-                fit_aspect_size(1067, 800).0,
-                fit_aspect_size(1067, 800).1,
+                fit_aspect_size(1067, 800, TEST_GAME_SIZE).0,
+                fit_aspect_size(1067, 800, TEST_GAME_SIZE).1,
                 false,
-                true
+                true,
+                TEST_GAME_SIZE
             ),
             ResizeDecision::Proceed
         );
@@ -882,7 +920,7 @@ mod tests {
     #[test]
     fn classify_resize_proceeds_when_not_aspect_locked() {
         assert_eq!(
-            classify_resize(1100, 800, false, false),
+            classify_resize(1100, 800, false, false, TEST_GAME_SIZE),
             ResizeDecision::Proceed
         );
     }
@@ -890,7 +928,7 @@ mod tests {
     #[test]
     fn classify_resize_proceeds_when_fullscreen() {
         assert_eq!(
-            classify_resize(1100, 800, true, true),
+            classify_resize(1100, 800, true, true, TEST_GAME_SIZE),
             ResizeDecision::Proceed
         );
     }
@@ -919,6 +957,7 @@ mod tests {
             FullscreenScaleMode::Fit,
             false,
             PhysicalSize::new(1000, 700),
+            TEST_GAME_SIZE,
         );
 
         assert!(!marks.fit);

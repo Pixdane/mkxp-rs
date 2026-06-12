@@ -53,6 +53,8 @@ pub fn run_demo() -> anyhow::Result<()> {
         title = %runtime_config.window_title,
         width = runtime_config.window_size.0,
         height = runtime_config.window_size.1,
+        game_width = runtime_config.game_size.0,
+        game_height = runtime_config.game_size.1,
         target_fps = runtime_config.target_fps,
         vsync = runtime_config.vsync,
         reset_enabled = runtime_config.enable_reset,

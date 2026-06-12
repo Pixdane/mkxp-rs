@@ -26,7 +26,7 @@ MKXP_* 环境变量              最高优先级
 
 ## 引擎配置 (mkxp.ron)
 
-引擎配置使用 [RON](https://github.com/ron-rs/ron) 格式。所有字段可选，缺失时使用 Rust `Default` 值。
+引擎配置使用 [RON](https://github.com/ron-rs/ron) 格式。所有字段可选，缺失字段会先由低优先级来源补齐，最后再由顶层 `Config::default()` 的参考默认值补齐。
 
 ### ruby
 
@@ -44,7 +44,7 @@ MKXP_* 环境变量              最高优先级
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `title` | `String` | `""` | 窗口标题。为空时使用 Game.ini 的 Title 字段值。 |
-| `size` | `(i32, i32)` | `(640, 480)` | 逻辑分辨率（像素）。`(0, 0)` 表示使用该 RGSS 版本的默认分辨率。 |
+| `size` | `(i32, i32)` | `(640, 480)` | 初始窗口物理尺寸。游戏逻辑分辨率使用 `graphics.game_size`。 |
 | `fullscreen` | `bool` | `false` | 是否以全屏模式启动。运行时可用 Alt+Enter 切换，不受此设置影响。 |
 | `resizable` | `bool` | `true` | 是否允许用户拖拽窗口边缘改变尺寸。 |
 | `fixed_aspect_ratio` | `bool` | `true` | 窗口尺寸改变时是否保持游戏画面宽高比，多余空间以黑边填充。 |
@@ -55,9 +55,10 @@ MKXP_* 环境变量              最高优先级
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `vsync` | `bool` | `true` | 是否等待显示器垂直同步信号后再交换缓冲区，以消除画面撕裂。 |
+| `vsync` | `bool` | `false` | 是否等待显示器垂直同步信号后再交换缓冲区，以消除画面撕裂。 |
 | `sync_to_refresh_rate` | `bool` | `false` | 是否将帧时序同步到显示器刷新率，并将真实帧率报告回 Ruby 脚本。如果无法检测刷新率则强制禁用。 |
-| `frame_rate` | `u32` | `60` | 帧率上限。运行时会将配置值限制在 `1..=240`。 |
+| `frame_rate` | `u32` | `60` | 帧率上限。`0` 会关闭 render-host 的 FPS gate；非 0 值会限制在 `1..=240`。 |
+| `game_size` | `(i32, i32)` | `(640, 480)` | 游戏逻辑分辨率，用于 viewport 宽高比、整数倍缩放和脚本侧 graphics 尺寸。 |
 | `scale_mode` | ScaleMode | `"bilinear"` | 默认缩放算法，作用于画面放大、缩小和位图缩放。可选 `"nearest"` `"bilinear"` `"bicubic"` `"lanczos3"` `"xbrz"`。 |
 | `scale_up` | `Option<ScaleMode>` | `None` | 覆写画面放大算法。`None` 表示跟随 `scale_mode`。 |
 | `scale_down` | `Option<ScaleMode>` | `None` | 覆写画面缩小算法。 |
@@ -170,6 +171,7 @@ mkxp-z 仅定义了 3 个环境变量：`MKXPZ_WINDOWS_CONSOLE`（启用控制�
 | `MKXP_GRAPHICS__SCALE_MODE` | `graphics.scale_mode` |
 | `MKXP_GRAPHICS__VSYNC` | `graphics.vsync` |
 | `MKXP_GRAPHICS__FRAME_RATE` | `graphics.frame_rate` |
+| `MKXP_GRAPHICS__GAME_SIZE` | `graphics.game_size`（格式 `640x480`） |
 | `MKXP_PATHS__GAME_FOLDER` | `paths.game_folder` |
 | `MKXP_FONTS__SCALE` | `fonts.scale` |
 | `MKXP_FONTS__HINTING` | `fonts.hinting` |
@@ -203,6 +205,7 @@ mkxp-z 只识别三个参数：`debug`、`test` 和 `btest`（源码 `config.cpp
 | `--scale-mode` | `graphics.scale_mode` |
 | `--no-vsync` | `graphics.vsync`（flag） |
 | `--frame-rate <n>` | `graphics.frame_rate` |
+| `--game-size <WxH>` | `graphics.game_size` |
 | `--font-scale <n>` | `fonts.scale` |
 | `--font-hinting` | `fonts.hinting` |
 | `--no-kerning` | `fonts.kerning`（flag） |

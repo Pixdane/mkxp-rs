@@ -116,6 +116,7 @@ impl<E: ScriptEngine> App<E> {
             WindowConfig {
                 title: self.config.window_title.clone(),
                 inner_size: self.config.window_size,
+                game_size: self.config.game_size,
                 enable_reset: self.config.enable_reset,
                 ..Default::default()
             },

@@ -18,10 +18,6 @@ use mkxp_graphics::ViewportScaleMode;
 
 use crate::runtime::{RuntimeEvent, SharedRuntime};
 
-// ── Constants ──
-
-const DEFAULT_FPS: u32 = 60;
-
 /// Advances the frame deadline from a fixed timeline.
 ///
 /// `next_frame_at` is the previous scheduled deadline. The render loop advances
@@ -108,8 +104,10 @@ fn render_loop(
     commands: &Receiver<RenderCommand>,
 ) -> Result<(), RenderError> {
     let mut next_frame_at = Instant::now();
-    #[allow(unused_assignments)]
-    let mut frame_duration = Duration::from_nanos(1_000_000_000 / DEFAULT_FPS as u64);
+    let mut frame_duration = {
+        let fps = runtime.graphics.lock().unwrap().target_fps();
+        frame_duration_for_fps(fps)
+    };
 
     loop {
         // 1. Wait for a script-ready frame or shutdown.
@@ -128,7 +126,7 @@ fn render_loop(
 
         // 3. Wait until the FPS gate opens.
         let now = Instant::now();
-        if now < next_frame_at {
+        if frame_duration.is_some() && now < next_frame_at {
             // Coarse sleep; a future improvement could use Condvar::wait_timeout.
             thread::sleep(next_frame_at - now);
         }
@@ -157,10 +155,22 @@ fn render_loop(
 
         // 7. Refresh fps if the game changed it.
         let current_fps = runtime.graphics.lock().unwrap().target_fps();
-        frame_duration = Duration::from_nanos(1_000_000_000 / current_fps as u64);
+        frame_duration = frame_duration_for_fps(current_fps);
 
         // 8. Advance the fixed timeline.
-        next_frame_at = advance_frame_deadline(next_frame_at, frame_duration, Instant::now());
+        if let Some(frame_duration) = frame_duration {
+            next_frame_at = advance_frame_deadline(next_frame_at, frame_duration, Instant::now());
+        } else {
+            next_frame_at = Instant::now();
+        }
+    }
+}
+
+fn frame_duration_for_fps(fps: u32) -> Option<Duration> {
+    if fps == 0 {
+        None
+    } else {
+        Some(Duration::from_nanos(1_000_000_000 / fps as u64))
     }
 }
 
@@ -249,6 +259,15 @@ mod tests {
         assert_eq!(
             advance_frame_deadline(now, frame_duration, now + Duration::from_millis(100)),
             now + Duration::from_millis(100) + frame_duration
+        );
+    }
+
+    #[test]
+    fn frame_duration_for_fps_treats_zero_as_uncapped() {
+        assert_eq!(frame_duration_for_fps(0), None);
+        assert_eq!(
+            frame_duration_for_fps(60),
+            Some(Duration::from_nanos(16_666_666))
         );
     }
 }

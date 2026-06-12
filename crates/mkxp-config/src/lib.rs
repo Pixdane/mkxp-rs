@@ -1,12 +1,14 @@
 //! mkxp-config — layered configuration loading for mkxp-rs.
 //!
-//! Reads configuration from five sources in priority order and merges them:
+//! Reads configuration from five sources in priority order and merges them,
+//! then fills any remaining gaps from the reference defaults:
 //!
-//! 1. Command-line arguments (`--xxx` flags)
-//! 2. Environment variables (`MKXP_*`)
+//! 1. Environment variables (`MKXP_*`)
+//! 2. Command-line arguments (`--xxx` flags)
 //! 3. User config (`~/.config/mkxp-rs/mkxp.ron`)
 //! 4. Game directory config (`mkxp.ron`)
 //! 5. `Game.ini` (Title and Scripts only)
+//! 6. Reference defaults from `Config::default()`
 //!
 //! Uses the `config` crate for RON, INI, and environment variable parsing,
 //! `clap` for command-line argument parsing, and `merge` for layering sources.
@@ -24,15 +26,15 @@
 //!
 //! | Event | Level | Content |
 //! |-------|-------|---------|
-//! | CLI args parsed | `debug` | `rgss_version`, `window.size`, `debug.mode`, `debug.log_level` |
+//! | CLI args parsed | `debug` | `rgss_version`, `window.size`, `graphics.game_size`, `debug.mode`, `debug.log_level` |
 //! | Env vars detected | `info` | when any `MKXP_*` variable is set |
 //! | User config loaded | `info` | `path` to the user's `mkxp.ron` |
 //! | Game config loaded | `info` | `"loaded game config from mkxp.ron"` |
 //! | Game.ini loaded | `info` | `title` and `scripts` from `[Game]` section |
 //! | Configuration done | `info` | final `rgss_version` |
 
-pub mod config;
 mod command_line;
+pub mod config;
 
 use merge::Merge;
 
@@ -52,7 +54,7 @@ pub enum SourceError {
 /// Load configuration from all sources and merge them.
 ///
 /// Sources are applied from highest to lowest priority:
-/// CLI args → environment → user config → game config → Game.ini.
+/// environment → CLI args → user config → game config → Game.ini → defaults.
 /// Within the `merge` crate semantics, the first-merged source wins;
 /// subsequent sources only fill fields that are still `None`.
 ///
@@ -62,66 +64,67 @@ pub enum SourceError {
 /// let cfg = mkxp_config::load(std::env::args().collect()).unwrap();
 /// ```
 pub fn load(cli_args: Vec<String>) -> Result<Config, SourceError> {
-    // Start with CLI config (highest priority — merged first wins).
-    let mut cfg = command_line::parse(&cli_args).map_err(SourceError::Cli)?;
-    tracing::debug!(?cfg.ruby.rgss_version, ?cfg.window.size, ?cfg.window.fullscreen,
-        ?cfg.debug.mode, ?cfg.debug.log_level,
+    let cli_cfg = command_line::parse(&cli_args).map_err(SourceError::Cli)?;
+    tracing::debug!(?cli_cfg.ruby.rgss_version, ?cli_cfg.window.size, ?cli_cfg.graphics.game_size,
+        ?cli_cfg.window.fullscreen, ?cli_cfg.debug.mode, ?cli_cfg.debug.log_level,
         "CLI args parsed");
 
-    // --- 2. Environment variables ---
+    let mut cfg = Config::empty();
+
+    // --- 1. Environment variables ---
     if let Ok(env_builder) = ::config::Config::builder()
         .add_source(::config::Environment::with_prefix("MKXP").separator("__"))
         .build()
+        && let Ok(env_cfg) = env_builder.try_deserialize::<Config>()
     {
-        if let Ok(env_cfg) = env_builder.try_deserialize::<Config>() {
-            let had_env = env_cfg.window.title.is_some()
-                || env_cfg.debug.mode.is_some()
-                || env_cfg.debug.log_level.is_some();
-            cfg.merge(env_cfg);
-            if had_env {
-                tracing::info!("loaded env config (MKXP_* variables)");
-            }
+        let had_env = env_cfg.window.title.is_some()
+            || env_cfg.debug.mode.is_some()
+            || env_cfg.debug.log_level.is_some();
+        cfg.merge(env_cfg);
+        if had_env {
+            tracing::info!("loaded env config (MKXP_* variables)");
         }
     }
 
+    // --- 2. CLI args ---
+    cfg.merge(cli_cfg);
+
     // --- 3. User config ---
-    if let Some(user_path) = user_config_path() {
-        if let Ok(user_builder) = ::config::Config::builder()
+    if let Some(user_path) = user_config_path()
+        && let Ok(user_builder) = ::config::Config::builder()
             .add_source(::config::File::with_name(&user_path).required(false))
             .build()
-        {
-            if let Ok(user_cfg) = user_builder.try_deserialize::<Config>() {
-                cfg.merge(user_cfg);
-                tracing::info!(path = %user_path, "loaded user config");
-            }
-        }
+        && let Ok(user_cfg) = user_builder.try_deserialize::<Config>()
+    {
+        cfg.merge(user_cfg);
+        tracing::info!(path = %user_path, "loaded user config");
     }
 
     // --- 4. Game directory mkxp.ron ---
     if let Ok(ron_builder) = ::config::Config::builder()
         .add_source(::config::File::with_name("mkxp").required(false))
         .build()
+        && let Ok(ron_cfg) = ron_builder.try_deserialize::<Config>()
     {
-        if let Ok(ron_cfg) = ron_builder.try_deserialize::<Config>() {
-            cfg.merge(ron_cfg);
-            tracing::info!("loaded game config from mkxp.ron");
-        }
+        cfg.merge(ron_cfg);
+        tracing::info!("loaded game config from mkxp.ron");
     }
 
-    // --- 5. Game.ini (lowest priority — fills remaining gaps) ---
+    // --- 5. Game.ini (lowest explicit source — fills remaining gaps) ---
     if let Ok(ini_builder) = ::config::Config::builder()
         .add_source(::config::File::with_name("Game").required(false))
         .build()
+        && let Ok(ini_cfg) = ini_builder.try_deserialize::<IniHelper>()
     {
-        if let Ok(ini_cfg) = ini_builder.try_deserialize::<IniHelper>() {
-            apply_ini_to_config(&mut cfg, &ini_cfg);
-            if let (Some(title), Some(scripts)) = (&ini_cfg.game.title, &ini_cfg.game.scripts) {
-                tracing::info!(title, scripts, "loaded Game.ini");
-            } else {
-                tracing::info!("loaded Game.ini");
-            }
+        apply_ini_to_config(&mut cfg, &ini_cfg);
+        if let (Some(title), Some(scripts)) = (&ini_cfg.game.title, &ini_cfg.game.scripts) {
+            tracing::info!(title, scripts, "loaded Game.ini");
+        } else {
+            tracing::info!("loaded Game.ini");
         }
     }
+
+    cfg.fill_defaults();
 
     tracing::info!(rgss_version = ?cfg.ruby.rgss_version, "configuration loaded");
     Ok(cfg)
@@ -149,10 +152,16 @@ struct IniGame {
 /// Apply Game.ini values to a Config. Only `window.title` and
 /// `ruby.scripts_path` are set; all other fields are left alone.
 fn apply_ini_to_config(cfg: &mut Config, ini: &IniHelper) {
-    if let Some(title) = &ini.game.title {
-        if !title.is_empty() {
-            cfg.window.title = Some(title.clone());
-        }
+    if let Some(title) = &ini.game.title
+        && !title.is_empty()
+        && cfg
+            .window
+            .title
+            .as_deref()
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        cfg.window.title = Some(title.clone());
     }
     if let Some(scripts) = &ini.game.scripts {
         cfg.ruby.scripts_path = Some(scripts.clone());
@@ -178,14 +187,40 @@ mod tests {
     // ----------------------------------------------------------------
 
     #[test]
-    fn default_config_has_all_fields_none() {
-        let cfg = Config::default();
+    fn empty_config_has_all_fields_none() {
+        let cfg = Config::empty();
         assert!(cfg.ruby.rgss_version.is_none());
         assert!(cfg.window.title.is_none());
         assert!(cfg.window.size.is_none());
         assert!(cfg.graphics.vsync.is_none());
         assert!(cfg.audio.master_volume.is_none());
         assert!(cfg.debug.mode.is_none());
+    }
+
+    #[test]
+    fn default_config_has_reference_defaults() {
+        let cfg = Config::default();
+
+        assert_eq!(cfg.ruby.rgss_version.as_deref(), Some("3"));
+        assert_eq!(cfg.window.title.as_deref(), Some(""));
+        assert_eq!(cfg.window.size, Some((640, 480)));
+        assert_eq!(cfg.graphics.frame_rate, Some(60));
+        assert_eq!(cfg.input.enable_reset, Some(true));
+    }
+
+    #[test]
+    fn reference_defaults_match_sample_config_values() {
+        let cfg = Config::default();
+
+        assert_eq!(cfg.ruby.rgss_version.as_deref(), Some("3"));
+        assert_eq!(cfg.window.title.as_deref(), Some(""));
+        assert_eq!(cfg.window.size, Some((640, 480)));
+        assert_eq!(cfg.window.fullscreen, Some(false));
+        assert_eq!(cfg.window.resizable, Some(true));
+        assert_eq!(cfg.graphics.vsync, Some(false));
+        assert_eq!(cfg.graphics.frame_rate, Some(60));
+        assert_eq!(cfg.graphics.game_size, Some((640, 480)));
+        assert_eq!(cfg.input.enable_reset, Some(true));
     }
 
     // ----------------------------------------------------------------
@@ -197,8 +232,20 @@ mod tests {
     /// then merge lower-priority sources to fill in missing fields.
     #[test]
     fn merge_higher_priority_first_wins() {
-        let cli  = Config { window: config::Window { title: Some("CLI".into()), ..Default::default() }, ..Default::default() };
-        let game = Config { window: config::Window { title: Some("Game".into()), ..Default::default() }, ..Default::default() };
+        let cli = Config {
+            window: config::Window {
+                title: Some("CLI".into()),
+                ..Default::default()
+            },
+            ..Config::empty()
+        };
+        let game = Config {
+            window: config::Window {
+                title: Some("Game".into()),
+                ..Default::default()
+            },
+            ..Config::empty()
+        };
         let mut cfg = cli;
         cfg.merge(game);
         // cli was merged first, so its value wins
@@ -207,9 +254,15 @@ mod tests {
 
     #[test]
     fn merge_none_keeps_existing_value() {
-        let mut cfg = Config::default();
-        let game = Config { window: config::Window { title: Some("Game".into()), ..Default::default() }, ..Default::default() };
-        let empty = Config::default();
+        let mut cfg = Config::empty();
+        let game = Config {
+            window: config::Window {
+                title: Some("Game".into()),
+                ..Default::default()
+            },
+            ..Config::empty()
+        };
+        let empty = Config::empty();
         cfg.merge(game);
         cfg.merge(empty);
         assert_eq!(cfg.window.title, Some("Game".into()));
@@ -219,8 +272,20 @@ mod tests {
     fn merge_different_fields_coexist() {
         // source_a provides title, source_b provides size.
         // Merge order: a first (title wins), then b (fills size gap).
-        let source_a = Config { window: config::Window { title: Some("Title".into()), ..Default::default() }, ..Default::default() };
-        let source_b = Config { window: config::Window { size: Some((800, 600)), ..Default::default() }, ..Default::default() };
+        let source_a = Config {
+            window: config::Window {
+                title: Some("Title".into()),
+                ..Default::default()
+            },
+            ..Config::empty()
+        };
+        let source_b = Config {
+            window: config::Window {
+                size: Some((800, 600)),
+                ..Default::default()
+            },
+            ..Config::empty()
+        };
         let mut cfg = source_a;
         cfg.merge(source_b);
         assert_eq!(cfg.window.title, Some("Title".into()));
@@ -249,16 +314,14 @@ mod tests {
             .build();
 
         match result {
-            Ok(b) => {
-                match b.try_deserialize::<Config>() {
-                    Ok(cfg) => {
-                        assert_eq!(cfg.ruby.rgss_version, Some("1".into()));
-                        assert_eq!(cfg.window.title, Some("My Game".into()));
-                        assert_eq!(cfg.window.size, Some((800, 600)));
-                    }
-                    Err(e) => panic!("deserialize failed: {}", e),
+            Ok(b) => match b.try_deserialize::<Config>() {
+                Ok(cfg) => {
+                    assert_eq!(cfg.ruby.rgss_version, Some("1".into()));
+                    assert_eq!(cfg.window.title, Some("My Game".into()));
+                    assert_eq!(cfg.window.size, Some((800, 600)));
                 }
-            }
+                Err(e) => panic!("deserialize failed: {}", e),
+            },
             Err(e) => panic!("build failed: {}", e),
         }
 
@@ -275,9 +338,9 @@ mod tests {
             game: IniGame {
                 title: Some("Test Game".into()),
                 scripts: Some("Data/Scripts.rxdata".into()),
-            }
+            },
         };
-        let mut cfg = Config::default();
+        let mut cfg = Config::empty();
         apply_ini_to_config(&mut cfg, &ini);
         assert_eq!(cfg.window.title, Some("Test Game".into()));
         assert_eq!(cfg.ruby.scripts_path, Some("Data/Scripts.rxdata".into()));
@@ -285,11 +348,56 @@ mod tests {
     }
 
     #[test]
+    fn ini_title_does_not_override_explicit_title() {
+        let ini = IniHelper {
+            game: IniGame {
+                title: Some("Game.ini Title".into()),
+                scripts: None,
+            },
+        };
+        let mut cfg = Config {
+            window: config::Window {
+                title: Some("Configured Title".into()),
+                ..Default::default()
+            },
+            ..Config::empty()
+        };
+
+        apply_ini_to_config(&mut cfg, &ini);
+
+        assert_eq!(cfg.window.title.as_deref(), Some("Configured Title"));
+    }
+
+    #[test]
+    fn ini_title_fills_empty_title() {
+        let ini = IniHelper {
+            game: IniGame {
+                title: Some("Game.ini Title".into()),
+                scripts: None,
+            },
+        };
+        let mut cfg = Config {
+            window: config::Window {
+                title: Some(String::new()),
+                ..Default::default()
+            },
+            ..Config::empty()
+        };
+
+        apply_ini_to_config(&mut cfg, &ini);
+
+        assert_eq!(cfg.window.title.as_deref(), Some("Game.ini Title"));
+    }
+
+    #[test]
     fn ini_empty_title_is_ignored() {
         let ini = IniHelper {
-            game: IniGame { title: Some("".into()), scripts: None }
+            game: IniGame {
+                title: Some("".into()),
+                scripts: None,
+            },
         };
-        let mut cfg = Config::default();
+        let mut cfg = Config::empty();
         apply_ini_to_config(&mut cfg, &ini);
         assert_eq!(cfg.window.title, None);
         assert!(cfg.ruby.scripts_path.is_none());
@@ -305,25 +413,39 @@ mod tests {
     fn full_pipeline_respects_merge_order() {
         // Simulate CLI (1st, highest)
         let cli = Config {
-            window: config::Window { size: Some((1920, 1080)), ..Default::default() },
-            ..Default::default()
+            window: config::Window {
+                size: Some((1920, 1080)),
+                ..Default::default()
+            },
+            ..Config::empty()
         };
         // Simulate game RON (4th)
         let ron = Config {
-            window: config::Window { title: Some("RON".into()), size: Some((640, 480)), ..Default::default() },
-            ..Default::default()
+            window: config::Window {
+                title: Some("RON".into()),
+                size: Some((640, 480)),
+                ..Default::default()
+            },
+            ..Config::empty()
         };
         // Simulate INI (5th, lowest)
         let ini = Config {
-            window: config::Window { title: Some("INI".into()), ..Default::default() },
-            ruby: config::Ruby { scripts_path: Some("Scripts.rxdata".into()), ..Default::default() },
-            ..Default::default()
+            window: config::Window {
+                title: Some("INI".into()),
+                ..Default::default()
+            },
+            ruby: config::Ruby {
+                scripts_path: Some("Scripts.rxdata".into()),
+                ..Default::default()
+            },
+            ..Config::empty()
         };
 
         // Merge from highest to lowest
         let mut cfg = cli;
         cfg.merge(ron);
         cfg.merge(ini);
+        cfg.fill_defaults();
 
         // CLI size wins (merged first)
         assert_eq!(cfg.window.size, Some((1920, 1080)));
@@ -331,5 +453,8 @@ mod tests {
         assert_eq!(cfg.window.title, Some("RON".into()));
         // INI scripts_path fills the gap
         assert_eq!(cfg.ruby.scripts_path, Some("Scripts.rxdata".into()));
+        // Reference defaults fill everything left unset.
+        assert_eq!(cfg.graphics.frame_rate, Some(60));
+        assert_eq!(cfg.input.enable_reset, Some(true));
     }
 }

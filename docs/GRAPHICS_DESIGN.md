@@ -1201,6 +1201,8 @@ fn main() -> anyhow::Result<()> {
 `GraphicsState` 位于 `SharedRuntime` 的 mutex 后面。script thread 在
 `Graphics.update` 前修改脚本可见的图形状态；render thread 在 frame ready 后应用
 resize/viewport command 并调用 `GraphicsState::update()` present 当前帧。
+逻辑游戏尺寸由 `RuntimeConfig.game_size` 传入 `GraphicsState::new`，不由
+`mkxp-window` 的窗口策略常量决定。
 
 ---
 

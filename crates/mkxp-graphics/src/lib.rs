@@ -47,7 +47,7 @@ pub struct GraphicsState {
     /// 游戏内容的固定分辨率。XP = (640,480), VX/Ace = (544,416)。
     game_size: (u32, u32),
 
-    /// 目标帧率。可通过 `set_target_fps` 运行时修改。
+    /// 目标帧率。`0` 表示不由 render host 做 FPS gate。
     target_fps: u32,
 
     /// 窗口内游戏画面的区域（保持宽高比、居中、其余黑色填充）。
@@ -247,9 +247,9 @@ impl GraphicsState {
         self.target_fps
     }
 
-    /// 设置目标帧率。运行时可变，下一帧生效。
+    /// 设置目标帧率。`0` 表示 uncapped，非零值会被限制在 `1..=240`。
     pub fn set_target_fps(&mut self, fps: u32) {
-        self.target_fps = fps.clamp(1, 240);
+        self.target_fps = if fps == 0 { 0 } else { fps.clamp(1, 240) };
     }
 
     #[allow(clippy::too_many_arguments)]

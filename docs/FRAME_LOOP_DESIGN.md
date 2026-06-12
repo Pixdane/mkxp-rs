@@ -95,6 +95,10 @@ script continues
 winit main thread 不直接改 `GraphicsState`；它把会影响 render 的窗口输出转成
 `RenderCommand`。
 
+`RuntimeConfig.game_size` 是逻辑游戏尺寸来源。`App` 把它传给
+`WindowController` 用于窗口约束和菜单整数倍计算，也传给 `GraphicsState::new`
+用于 viewport 计算；script engine 通过 `ScriptContext::config()` 读取同一个值。
+
 ## RenderCommand
 
 ```rust

@@ -17,7 +17,6 @@ use tracing::{debug, error, info};
 
 use crate::error::{ScriptError, ScriptExit, ScriptRunResult, panic_payload_to_string};
 use crate::runtime::{RuntimeConfig, RuntimeEvent, SharedRuntime};
-use crate::window_control::{GAME_H, GAME_W};
 
 /// A script engine that can run on the script host thread.
 ///
@@ -69,10 +68,6 @@ impl ScriptContext {
         f(&mut self.runtime.graphics.lock().unwrap())
     }
 
-    #[allow(
-        dead_code,
-        reason = "script engines start reading config in the generic engine/config tasks"
-    )]
     pub(crate) fn config(&self) -> &RuntimeConfig {
         &self.runtime.config
     }
@@ -92,6 +87,7 @@ pub(crate) struct DemoScriptEngine;
 
 impl ScriptEngine for DemoScriptEngine {
     fn run(self, ctx: ScriptContext) -> ScriptRunResult {
+        let (game_w, game_h) = ctx.config().game_size;
         let mut x = 220.0_f32;
         let mut y = 165.0_f32;
         let mut dx = 2.0_f32;
@@ -100,14 +96,14 @@ impl ScriptEngine for DemoScriptEngine {
         while !ctx.is_shutdown_requested() {
             x += dx;
             y += dy;
-            if x <= 0.0 || x + 200.0 >= GAME_W as f32 {
+            if x <= 0.0 || x + 200.0 >= game_w as f32 {
                 dx = -dx;
             }
-            if y <= 0.0 || y + 150.0 >= GAME_H as f32 {
+            if y <= 0.0 || y + 150.0 >= game_h as f32 {
                 dy = -dy;
             }
-            let r = (x / GAME_W as f32).clamp(0.0, 1.0);
-            let g = (y / GAME_H as f32).clamp(0.0, 1.0);
+            let r = (x / game_w as f32).clamp(0.0, 1.0);
+            let g = (y / game_h as f32).clamp(0.0, 1.0);
             let b = 0.5;
 
             ctx.with_graphics(|graphics| {
