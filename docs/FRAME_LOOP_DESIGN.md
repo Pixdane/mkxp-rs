@@ -212,9 +212,11 @@ The script side no longer needs to wake winit for normal per-frame rendering.
 
 Runtime control keeps shutdown and restart separate. Shutdown is terminal and
 causes the render host to exit. Restart wakes the blocked script, clears any
-pending frame through `FrameSync::reset()`, joins the old script after it
-reports `ScriptExit::RestartRequested`, and spawns a fresh `E::default()`
-without recreating the window or render host.
+pending frame through `FrameSync::reset()`, restores script-owned demo graphics
+state and target FPS from runtime config, joins the old script after it reports
+`ScriptExit::RestartRequested`, and spawns a fresh `E::default()` without
+recreating the window or render host. Window state such as size, fullscreen, and
+viewport scale mode stays owned by `WindowController` and is not reset here.
 
 The render side blocks on the same `Condvar`. It wakes when:
 
@@ -382,7 +384,7 @@ Script restart is non-fatal:
 ```text
 ScriptExit::RestartRequested
   -> join old script thread
-  -> clear restart control and pending frame state
+  -> clear restart control, pending frame state, demo graphics state, and FPS
   -> spawn_script_thread(E::default(), ...)
 ```
 

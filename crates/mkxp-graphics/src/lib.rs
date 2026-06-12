@@ -17,6 +17,10 @@ use wgpu::{Device, Queue, Surface, SurfaceConfiguration};
 use geometry::Quad;
 use pipeline::PipelineSet;
 
+const DEMO_QUAD_W: f32 = 200.0;
+const DEMO_QUAD_H: f32 = 150.0;
+const DEMO_QUAD_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+
 /// Viewport 缩放模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewportScaleMode {
@@ -115,11 +119,11 @@ impl GraphicsState {
 
         let test_quad = Quad::new(
             &device,
-            (surface_config.width as f32 - 200.0) / 2.0,
-            (surface_config.height as f32 - 150.0) / 2.0,
-            200.0,
-            150.0,
-            [1.0, 0.2, 0.2, 1.0],
+            (surface_config.width as f32 - DEMO_QUAD_W) / 2.0,
+            (surface_config.height as f32 - DEMO_QUAD_H) / 2.0,
+            DEMO_QUAD_W,
+            DEMO_QUAD_H,
+            DEMO_QUAD_COLOR,
         );
 
         Self {
@@ -252,6 +256,26 @@ impl GraphicsState {
     pub fn set_test_quad(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, g: f32, b: f32) {
         self.test_quad.set_pos(x, y, w, h);
         self.test_quad.set_color(r, g, b, 1.0);
+    }
+
+    /// Reset temporary demo graphics state.
+    ///
+    /// This is intentionally narrow until the real scene graph/reset boundary
+    /// replaces the demo quad.
+    pub fn reset_demo_state(&mut self) {
+        let (w, h) = self.window_size;
+        self.test_quad.set_pos(
+            (w as f32 - DEMO_QUAD_W) / 2.0,
+            (h as f32 - DEMO_QUAD_H) / 2.0,
+            DEMO_QUAD_W,
+            DEMO_QUAD_H,
+        );
+        self.test_quad.set_color(
+            DEMO_QUAD_COLOR[0],
+            DEMO_QUAD_COLOR[1],
+            DEMO_QUAD_COLOR[2],
+            DEMO_QUAD_COLOR[3],
+        );
     }
 }
 

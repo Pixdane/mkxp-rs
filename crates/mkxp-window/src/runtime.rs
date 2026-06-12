@@ -218,6 +218,9 @@ impl SharedRuntime {
         self.script_outcome.take();
         self.control.clear_restart();
         self.frame_sync.reset();
+        let mut graphics = self.graphics.lock().unwrap();
+        graphics.set_target_fps(self.config.target_fps);
+        graphics.reset_demo_state();
     }
 }
 
