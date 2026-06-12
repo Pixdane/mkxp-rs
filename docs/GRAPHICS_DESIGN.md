@@ -131,7 +131,9 @@ impl GameWindow {
 事件循环 (winit event loop)
   │
   ├── Resized 事件 → graphics.on_resize(width, height)
-  ├── AboutToWait  → graphics.update() → 画一帧
+  ├── RuntimeEvent::ScriptFrameReady / AboutToWait
+  │      → if script ready && FPS gate open:
+  │          graphics.update() → 画一帧
   │
   ├─→ GameWindow (管理 winit 窗口，不碰 GPU)
   └─→ GraphicsState (持有 surface、device、场景图)
@@ -1207,29 +1209,7 @@ fn main() {
     );
 
     // ── 事件循环：binary crate 是唯一的协调者 ──
-    event_loop.run(move |event, elwt| {
-        match event {
-            // 窗口大小变化 → 通知渲染层
-            Event::WindowEvent {
-                event: WindowEvent::Resized(size), ..
-            } => {
-                graphics.on_resize(size.width, size.height);
-            }
-
-            // 键盘/鼠标事件 → 输入系统（将来）
-            // Event::WindowEvent { event: WindowEvent::KeyboardInput { .. }, .. } => {
-            //     input.handle_event(&event);
-            // }
-
-            // 空闲时 → 调用渲染层画一帧
-            Event::AboutToWait => {
-                let _ = graphics.update();
-                window.inner().request_redraw();
-            }
-
-            _ => {}
-        }
-    })?;
+    event_loop.run_app(&mut app)?;
 }
 ```
 
@@ -1238,6 +1218,8 @@ binary crate 做的事情 `mkxp-graphics` 一概不知：
 - wgpu Instance/Adapter/Device 初始化
 - 选择 GPU 后端（Vulkan/Metal/DX12）
 - 协调音频、输入、文件系统
+- 脚本线程和 `Graphics.update` 的 `FrameSync` 调度
+- `RuntimeEvent::ScriptFrameReady`、`ControlFlow::WaitUntil` 和 present mode 选择
 
 ---
 
@@ -1346,9 +1328,11 @@ Ruby 对象持有 `Arc<SpriteData>`，SceneGraph 持有 `Weak<SpriteData>`。
 
 帧率控制：
 
-macOS 上 winit 的 `Poll` 和 `request_redraw()` 不可靠（winit #2640），
-采用 `PresentMode::Immediate` + `ControlFlow::WaitUntil` — 系统级定时器
-独立于事件循环节奏。帧率通过 `FPS` 常量配置（XP=40, VX/Ace=60）。
+当前 `mkxp-window` 使用 `RuntimeEvent::ScriptFrameReady` 唤醒 winit，再用
+`next_frame_at` + `ControlFlow::WaitUntil` 执行 `target_fps` 门控。present mode
+默认使用 `wgpu::PresentMode::Fifo`，由显示同步避免 tearing；脚本线程不会因为
+user event 提前到达而越过 FPS 门控。完整帧循环见
+[`FRAME_LOOP_DESIGN.md`](FRAME_LOOP_DESIGN.md)。
 
 ---
 
@@ -1377,4 +1361,3 @@ macOS 上 winit 的 `Poll` 和 `request_redraw()` 不可靠（winit #2640），
 | `FrameSync` | 帧调度同步原语（Mutex + Condvar） | binary crate |
 
 > 帧循环的完整设计见 [FRAME_LOOP_DESIGN.md](FRAME_LOOP_DESIGN.md)。
-

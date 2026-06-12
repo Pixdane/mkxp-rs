@@ -1,345 +1,412 @@
-# mkxp-rs 帧循环设计：winit 为主体
+# mkxp-rs 帧循环设计：脚本阻塞，winit 渲染
 
-本文档定义 mkxp-rs 中 winit 事件循环和 Ruby 游戏逻辑之间的帧调度协议。
+本文档定义 mkxp-rs 中脚本线程、winit 事件循环和 graphics 渲染之间的帧同步协议。
+当前 `mkxp-window` demo 已经按这个形状运行；未来接入 magnus/RGSS 时，应把 demo
+thread 替换成真实脚本线程，而不是改变帧同步模型。
 
-## 问题
+相关边界见：
 
-mkxp-z 的帧循环以 Ruby 为外层驱动：
+- [`WINDOW_CONTROLLER_DESIGN.md`](WINDOW_CONTROLLER_DESIGN.md)：窗口、菜单、全屏、
+  resize 和 `WindowOutput` 的职责边界。
+- [`WINDOW_CONSTRAINTS.md`](WINDOW_CONSTRAINTS.md)：窗口缩放、整数倍、全屏状态和
+  菜单状态的行为规格。
 
-```
-Ruby 线程（游戏线程）
+## 背景
+
+mkxp-z 的游戏逻辑以 RGSS 脚本循环为中心：
+
+```text
+RGSS 线程
   loop do
-    Graphics.update()    ← Ruby 主动调用，C++ 渲染一帧
-    Input.update()       ← 刷新按键状态
-    $scene.update        ← 纯 Ruby 游戏逻辑
+    Graphics.update
+    Input.update
+    $scene.update
   end
 
-主线程（事件线程）
-  SDL_WaitEvent() 循环   ← 处理窗口事件、键盘鼠标
+事件线程
+  SDL_WaitEvent
+  处理窗口、输入和平台事件
 ```
 
-两个线程共享 OpenGL 上下文（通过 `SDL_GL_MakeCurrent` 切换），
-共享全局输入数组（`keyStates`），通过 `UnidirMessage` 和 `AtomicFlag` 通信。
+`Graphics.update` 对脚本而言是“画面更新了一帧”的同步点。mkxp-z 内部通过
+OpenGL 上下文切换、事件线程和 RGSS 线程之间的同步原语完成这一点。
 
-在 mkxp-rs 中，**winit 必须是事件循环的唯一主体**。
-`EventLoop::run()` 接管整个线程，不能有另一个 `loop` 和它竞争。
-但 Ruby（magnus/MRI）需要在某个线程里执行 `loop { Graphics.update }`。
+mkxp-rs 不能把渲染直接放进脚本线程：
 
-这就产生了控制权归属的冲突：谁当外层循环？
+- `winit::EventLoop` 必须占用主线程，并且平台窗口事件必须由它驱动。
+- `wgpu::Surface`、窗口 resize、present 和平台生命周期需要收敛在 winit 主线程。
+- Ruby/MRI 需要在独立脚本线程中运行 RGSS loop。
 
-## 方案：winit 主导，Ruby 作为帧回调
+因此 mkxp-rs 的兼容目标是：脚本仍然自然调用 `Graphics.update`，但
+`Graphics.update` 不直接渲染。它通知 winit“脚本帧已经准备好”，然后阻塞，
+直到 winit 主线程完成实际渲染。
 
-```
-winit 线程（主线程，唯一的事件循环）
-  EventLoop::run()
-    ├─ Resized / Keyboard / Mouse 事件
-    │    → 更新输入状态（winit 直接捕获，不进 Ruby）
-    │
-    └─ AboutToWait（空闲 = 帧边界）
-         │
-         ├─ 1. 唤醒 Ruby 线程："跑一帧逻辑"
-         │      Ruby 线程执行：
-         │        $scene.update
-         │        Input.update（读取已缓存的输入状态）
-         │        Graphics.update → 阻塞，说"我准备好了"
-         │
-         ├─ 2. 执行实际渲染
-         │      GraphicsState::update()
-         │        scene_graph.composite()
-         │        后处理
-         │        present
-         │
-         └─ 3. 通知 Ruby 线程："渲染完成，继续"
-                Ruby 线程从 Graphics.update 返回
-                继续下一帧的 $scene.update ...
-```
+## 当前方案
 
-Ruby 不再是驾驶员。它是乘客——winit 每帧叫它一次，它跑完自己的逻辑后交出控制权。
+```text
+script thread
+  update game state
+  write graphics state
+  Graphics.update / FrameSync::script_frame_ready_and_wait
+    set ready = true
+    send RuntimeEvent::ScriptFrameReady
+    block on Condvar
 
-## 线程模型
-
-```
-┌─────────────────────────────────┐
-│  winit 线程（主线程）            │
-│                                 │
-│  GameWindow                     │
-│  GraphicsState（device/queue）  │
-│  输入状态（只写）                │
-│                                 │
-│  EventLoop::run() {             │
-│    AboutToWait => {             │
-│      ruby_resume();   // ①     │
-│      ruby_wait();      // ②     │
-│      graphics.update(); // ③   │
-│      ruby_signal();     // ④    │
-│    }                            │
-│  }                              │
-└────────────┬────────────────────┘
-             │  channel / condvar
-┌────────────┴────────────────────┐
-│  Ruby 线程（magnus/MRI）        │
-│                                 │
-│  loop do                        │
-│    Input.update   ← 读输入状态  │
-│    $scene.update  ← 游戏逻辑    │
-│    Graphics.update              │
-│      → ① 通知 winit            │
-│      → ② 阻塞等待              │
-│      → ④ 被唤醒，返回           │
-│  end                            │
-└─────────────────────────────────┘
+winit main thread
+  EventLoop<RuntimeEvent>::run_app
+  window_event / about_to_wait / user_event
+    apply WindowOutput first
+    if ready && now >= next_frame_at:
+      GraphicsState::update
+      ready = false
+      wake script thread
+      next_frame_at = now + frame_duration
 ```
 
-### 为什么 Ruby 必须在独立线程
+脚本线程仍然是游戏逻辑的外层循环；winit 主线程仍然是平台事件循环的唯一主体。
+二者在 `Graphics.update` 边界严格交替：
 
-magnus 嵌入的 MRI Ruby 解释器有 GVL（Global VM Lock）。Ruby 代码
-必须在持有 GVL 的线程中执行。winit 的事件循环也要求独占当前线程。
-两者不能共用一个线程——必须分开。
+1. 脚本线程推进一帧游戏状态。
+2. 脚本线程在 `Graphics.update` 设置 `ready = true`，发送 winit user event，然后阻塞。
+3. winit 主线程先处理窗口输出和 resize，再在 FPS 门控允许时调用 `GraphicsState::update()`。
+4. winit 主线程完成 present 后设置 `ready = false`，唤醒脚本线程。
+5. 脚本线程从 `Graphics.update` 返回，进入下一帧游戏逻辑。
 
-这和 mkxp-z 的结构完全一致：winit 线程对应 EventThread，
-Ruby 线程对应 RGSS 线程。
+## 线程和所有权
 
-## 帧生命周期（一帧的完整过程）
+```text
+App / winit main thread
+  owns:
+    WindowController
+    SharedRuntime
+    demo/script JoinHandle
 
-```
-时间轴 →
+SharedRuntime
+  owns:
+    Mutex<GraphicsState>
+    FrameSync
+    script_failure
+    shutdown
 
-winit 线程                    Ruby 线程
-──────────                    ──────────
-AboutToWait 到达
-│
-├─→ signal_frame_start() ──→ 被唤醒
-│                             │
-│                             ├─ Input.update()
-│                             │   读取 winit 线程缓存的按键状态
-│                             │
-│                             ├─ $scene.update
-│                             │   游戏逻辑：移动精灵、检查碰撞...
-│                             │
-│                             ├─ 可能创建/销毁 Sprite/Bitmap
-│                             │   这些操作影响 SceneGraph
-│                             │
-│                             └─ Graphics.update()
-│                                  → frame_ready.signal()  ──→ 收到信号
-│                                  → frame_done.wait()          │
-│                                     （阻塞）                  │
-│                                                              ├─ scene_graph.composite()
-│                                                              │  遍历场景树，元素画自己
-│                                                              │
-│                                                              ├─ 后处理
-│                                                              │  色调/亮度/颜色叠加
-│                                                              │
-│                                                              ├─ queue.submit()
-│                                                              ├─ frame.present()
-│                                                              │
-│                                                              └─ frame_done.signal() ──→ 被唤醒
-│                                                                    Graphics.update 返回
-│                                                                    回到 loop 顶部
-│                                                                    下一帧的 Input.update...
-│
-├─→ 回到 EventLoop，等下一个 AboutToWait
-│   （期间处理窗口事件、输入事件）
-│
-└─→ 下一个 AboutToWait ...
+WindowController
+  owns:
+    winit::Window
+    menu state
+    window mode / resize policy
+
+GraphicsState
+  owns:
+    wgpu::Surface
+    wgpu::Device
+    wgpu::Queue
+    viewport state
+
+script thread
+  borrows SharedRuntime through Arc
+  writes graphics state
+  blocks at FrameSync
 ```
 
-## 同步原语设计
+`WindowController` 和 `GraphicsState` 不直接互相持有。`App` 是 glue 层：
 
-用两个同步点控制帧的交替执行：
+- `WindowController` 输出 `WindowOutput`。
+- `App` 把 `SurfaceResized` 和 `ViewportScaleModeChanged` 应用到 `GraphicsState`。
+- `App` 在渲染前处理窗口输出，保证 resize/fullscreen 状态先进入 graphics。
+- `App` 退出时先设置 `shutdown`，唤醒并 join 脚本线程，再 drop runtime 和 window。
+
+`JoinHandle` 的 drop 只会 detach 线程，不会自动停止线程。必须显式 join，避免脚本线程
+在窗口和 surface teardown 期间继续持有或访问 `GraphicsState`。
+
+## FrameSync
+
+当前同步原语是一个 bool 加一个 `Condvar`：
 
 ```rust
-use std::sync::{Arc, Condvar, Mutex};
-
-/// winit 和 Ruby 线程之间的帧同步。
 struct FrameSync {
-    /// Ruby 线程是否已准备好（调用了 Graphics.update）。
-    /// true = Ruby 可以渲染了，winit 应该执行 GraphicsState::update
     ready: Mutex<bool>,
-    /// 条件变量：Ruby 等 winit 渲染完成，winit 等 Ruby 准备好。
     cv: Condvar,
 }
 ```
 
-两个关键操作：
+语义：
+
+- `ready = false`：脚本线程可以继续运行，winit 没有待渲染脚本帧。
+- `ready = true`：脚本线程已经到达 `Graphics.update` 并阻塞，winit 应渲染一帧。
+
+脚本侧：
 
 ```rust
-impl FrameSync {
-    /// Ruby 线程调用：通知 winit "我准备好了"，然后阻塞等渲染完成。
-    fn ruby_frame_ready_and_wait(&self) {
-        let mut ready = self.ready.lock().unwrap();
-        *ready = true;
-        self.cv.notify_one();            // 唤醒 winit
-        while *ready {
-            ready = self.cv.wait(ready).unwrap();  // 等 winit 渲染完
-        }
+fn script_frame_ready_and_wait(shutdown, wake_event_loop) -> bool {
+    ready = true;
+    wake_event_loop();      // send RuntimeEvent::ScriptFrameReady
+    cv.notify_one();
+
+    while ready && !shutdown {
+        cv.wait();
     }
 
-    /// winit 线程调用：等 Ruby 准备好，渲染，然后唤醒 Ruby。
-    fn winit_render_and_signal(&self) -> bool {
-        let mut ready = self.ready.lock().unwrap();
-        if !*ready {
-            return false;  // Ruby 还没准备好，跳过这帧
-        }
-        // ready == true，执行渲染...
-        *ready = false;
-        self.cv.notify_one();            // 唤醒 Ruby
-        true
-    }
+    !shutdown
 }
 ```
 
-只用了一个 Mutex + Condvar 和一个 bool。Ruby 侧和 winit 侧轮流翻转这个 bool。
-
-## Graphics.update 在绑定层的实现
-
-Ruby 调用的 `Graphics.update` 不是直接渲染，而是一个同步点：
+winit 侧：
 
 ```rust
-// magnus 绑定
-fn graphics_update(frame_sync: Arc<FrameSync>) -> magnus::Value {
-    // 1. 通知 winit："我准备好了"
-    frame_sync.ruby_frame_ready_and_wait();
-
-    // 2. 检查是否需要退出
-    if shutdown_requested() {
-        // 抛出让 loop 退出的异常
+fn render_if_script_ready() {
+    if script_failure {
+        panic on main thread;
     }
 
-    // 3. 返回，Ruby 继续下一帧逻辑
+    if !ready || now < next_frame_at {
+        return;
+    }
+
+    graphics.update();
+    ready = false;
+    cv.notify_one();
+    next_frame_at = now + frame_duration;
+}
+```
+
+`Condvar` 负责让脚本线程睡眠和被唤醒。它不能可靠唤醒已经停在
+`ControlFlow::WaitUntil` 的 winit 事件循环，所以脚本侧还必须发送
+`RuntimeEvent::ScriptFrameReady`。这对 macOS 尤其重要：如果只依赖
+`AboutToWait + WaitUntil`，在没有鼠标/窗口事件时可能出现刷新不及时。
+
+## User Event 和 FPS 门控
+
+`RuntimeEvent::ScriptFrameReady` 的作用只是唤醒 winit，让主线程尽快观察到
+`ready = true`。它不是“立即渲染”的许可。
+
+实际渲染仍由 `next_frame_at` 控制：
+
+```text
+if ready && Instant::now() >= next_frame_at:
+  render
+else:
+  keep waiting until next_frame_at
+```
+
+这个分层很重要：
+
+- 没有 user event：winit 在某些平台上可能睡到下一次输入/窗口事件才发现脚本 ready。
+- user event 直接触发渲染：脚本线程会在每次 ready 后立刻被释放，游戏速度可能超过
+  `Graphics.frame_rate` / `target_fps`。
+- user event + `next_frame_at`：winit 能及时醒来，但仍保持稳定帧率。
+
+`schedule_next_wake()` 用 `ControlFlow::WaitUntil(wake_at)` 安排下一次唤醒。
+如果下一帧时间已经过了，就使用当前 `target_fps` 计算一个新的 wake time，避免忙等。
+
+## Present Mode
+
+当前 `mkxp-window` 默认使用：
+
+```rust
+present_mode: wgpu::PresentMode::Fifo
+```
+
+理由：
+
+- `Fifo` 是跨平台的垂直同步 present mode，行为最接近默认 vsync。
+- macOS 上 `Immediate` 曾让刷新看起来更主动，但在全屏整数缩放后通过系统方式退出全屏时，
+  边缘可能出现 tearing。
+- 帧率稳定性由 `next_frame_at` 管，显示同步由 `Fifo` 管，二者职责不同。
+
+未来接入 `mkxp-config.graphics.vsync` 时，可以把 present mode 变成配置驱动。
+在那之前，默认保持 `Fifo`，优先保证画面稳定和跨平台一致性。
+
+## `Graphics.update` 绑定语义
+
+未来 Ruby 绑定层应把 `Graphics.update` 实现为同步点，而不是直接调用 renderer：
+
+```rust
+fn graphics_update(runtime: Arc<SharedRuntime>) -> magnus::Value {
+    if !runtime.frame_sync.script_frame_ready_and_wait(&runtime.shutdown, || {
+        let _ = proxy.send_event(RuntimeEvent::ScriptFrameReady);
+    }) {
+        // raise/return through the chosen shutdown path
+    }
+
     Qnil.into()
 }
 ```
 
-对游戏脚本来说，`Graphics.update` 的行为和 mkxp-z 完全一样——调用后画面更新了一帧。它不知道内部做了什么。
+对 RGSS 脚本的可见语义保持不变：`Graphics.update` 返回时，上一帧画面已经由
+winit 主线程提交。脚本不需要知道内部使用了 winit user event、wgpu present 或 condvar。
 
 ## 输入处理
 
-winit 线程直接捕获所有输入事件（键盘、鼠标、手柄）、写入共享状态。
-Ruby 线程的 `Input.update()` 读取这个共享状态，不通过事件队列中转。
+输入事件由 winit 主线程捕获。推荐模型：
 
-这和 mkxp-z 的模型一致——`EventThread::keyStates` 全局数组
-被 RGSS 线程直接读。区别是我们不需要 mutex（输入数据是简单的
-原子数组，两个线程一写一读不需要锁）。
+```text
+winit window_event
+  update shared InputState
 
-```rust
-/// winit 线程写，Ruby 线程读。
-struct InputState {
-    /// 键盘按键状态。下标是 scancode。
-    keys: [AtomicBool; KEY_COUNT],
-    /// 鼠标位置。
-    mouse_x: AtomicI32,
-    mouse_y: AtomicI32,
-    /// 鼠标按键。
-    mouse_buttons: [AtomicBool; 8],
-}
+Ruby Input.update
+  read shared InputState snapshot
+  compute trigger/repeat/release state
 ```
 
-## 退出和重置
+这和 mkxp-z 的共享 key state 思路一致。窗口级快捷键由 `WindowController` 消费；
+普通游戏输入应进入未来的 input service，不应混进窗口控制策略。
 
-退出和 F12 重置通过共享信号，不经过事件队列：
+目前窗口级快捷键只保留：
 
-```rust
-/// 跨线程控制信号。
-struct ControlSignals {
-    /// winit 设 true → Ruby 线程在下次 Graphics.update 时抛出退出异常。
-    shutdown: AtomicBool,
-    /// F12 按下时设 true → Ruby 线程在下次 Graphics.update 时抛出 Reset 异常。
-    reset: AtomicBool,
-}
+- `Alt+Enter`：切换全屏。
+
+全屏状态必须以平台真实状态为准。Alt+Enter、菜单项和 macOS 原生全屏/退出全屏都应通过
+同一套 `window_mode` 同步路径更新菜单勾选和 viewport 输出。
+
+## Resize 和窗口输出顺序
+
+窗口事件发生在 winit 主线程。每次 `window_event` 和 `about_to_wait` 都先让
+`WindowController` 处理事件，再把输出应用到 graphics：
+
+```text
+WindowEvent::Resized(w, h)
+  -> WindowController
+  -> WindowOutput::SurfaceResized { width: w, height: h }
+  -> GraphicsState::on_resize(w, h)
 ```
 
-退出流程：
+如果窗口锁定宽高比，自动修正 resize 是 `WindowController` 内部副作用；
+`SurfaceResized` 仍然输出真实 surface 尺寸，而不是修正目标尺寸。这样即使窗口短暂处于
+off-ratio，wgpu surface 也不会落后于平台真实大小。
 
-```
-winit 收到 Close 事件
-  → signals.shutdown = true
-  → 等 Ruby 线程退出
+渲染时序：
 
-Ruby 线程在 Graphics.update 中检查
-  → signals.shutdown == true
-  → 抛出异常，跳出 loop
-  → Ruby 线程结束
-```
-
-F12 重置流程：
-
-```
-winit 收到 F12 按键
-  → signals.reset = true
-
-Ruby 线程在 Graphics.update 中检查
-  → signals.reset == true
-  → 抛出 Reset 异常
-  → rgss_main 捕获，清除场景，重新调用 block
-  → 游戏从头开始
+```text
+winit wake
+  drain/apply WindowOutput
+  render_if_script_ready
+  schedule_next_wake
 ```
 
-## 窗口缩放事件
+因此 resize、全屏切换和 viewport mode 变化会在下一次 render 之前进入 graphics。
 
-缩放发生在 winit 线程。如果 Ruby 正在执行游戏逻辑（还没到
-`Graphics.update`），缩放事件的处理顺序是：
+## Panic、退出和重置
 
+脚本线程 panic 不应只停在后台线程里。当前 demo thread 用 `catch_unwind` 捕获 panic：
+
+```text
+script panic
+  -> record_script_panic(message)
+  -> shutdown = true
+  -> wake FrameSync
+  -> send ScriptFrameReady
+
+winit next tick
+  -> take_script_failure()
+  -> panic!("script thread panicked: ...")
 ```
-AboutToWait 之前：
-  winit 收到 Resized(w, h)
-    → 记录新尺寸到原子变量
-    → 本轮不触发 Ruby 重绘（Ruby 还在跑）
 
-AboutToWait：
-  1. Ruby 跑到 Graphics.update → frame_ready = true
-  2. winit 发现 resize_dirty = true
-     → graphics.on_resize(new_w, new_h)
-     → surface 重新配置
-  3. graphics.update() 用新尺寸渲染
-  4. Ruby 被唤醒，下一帧用新尺寸继续
+这样主线程会带着脚本错误失败，便于日志、崩溃报告和未来错误对话框统一处理。
+
+正常退出：
+
+```text
+winit QuitRequested / event loop exiting
+  -> shutdown = true
+  -> FrameSync::wake_all()
+  -> join script thread
+  -> drop SharedRuntime / GraphicsState
+  -> drop WindowController / winit Window
 ```
+
+未来 F12 reset 可以作为独立 control signal：
+
+```text
+winit detects reset shortcut
+  -> reset = true
+  -> wake script if needed
+
+script checks at Graphics.update boundary
+  -> raise Reset
+  -> rgss_main handles reset and restarts script entry
+```
+
+reset 不应绕过 `Graphics.update` 边界直接打断 renderer。
 
 ## 与 mkxp-z 的对比
 
-| | mkxp-z | mkxp-rs（winit 为主体） |
+| 项目 | mkxp-z | mkxp-rs |
 |---|---|---|
-| 外层循环 | Ruby `loop` + SDL 事件循环（双线程） | winit EventLoop（主）+ Ruby 线程（辅） |
-| 帧驱动者 | Ruby 主动调 `Graphics.update` | winit `AboutToWait` 触发一切 |
-| Ruby `Graphics.update` | 直接执行渲染 | 同步点：通知 winit + 等待渲染完成 |
-| 窗口事件 | EventThread 处理，通过 SDL 用户事件中转 | winit 线程直接处理 |
-| 输入 | 全局静态数组，RGSS 线程直接读 | 原子数组，winit 写 Ruby 读 |
-| 线程同步 | UnidirMessage + AtomicFlag + SyncPoint | 一个 Mutex + Condvar + 几个 AtomicBool |
-| OpenGL 上下文切换 | `SDL_GL_MakeCurrent` 在两个线程间切换 | 不需要切换——只有 winit 线程持有 wgpu 上下文 |
+| 平台事件循环 | SDL event thread | winit main thread |
+| 脚本线程 | RGSS thread | Ruby/demo script thread |
+| `Graphics.update` | 同步并触发渲染 | 设置 ready、发送 user event、阻塞 |
+| 渲染线程 | OpenGL context 可切换 | winit main thread owns wgpu render/present |
+| 唤醒机制 | SDL/user messages + sync points | `EventLoopProxy` + `Condvar` |
+| 帧率控制 | Graphics frame rate | `next_frame_at` + `target_fps` |
+| 显示同步 | OpenGL/driver vsync | `wgpu::PresentMode::Fifo` |
+| 窗口 resize | SDL event thread | `WindowController` -> `WindowOutput` -> `GraphicsState` |
 
-## 游戏脚本不用改
+## 当前实现状态
 
-关键的兼容性保证：游戏脚本里的 `loop { Graphics.update; ... }` 写法和
-mkxp-z 完全一样。`Graphics.update` 的行为从脚本角度看没有变化——
-调用后画面更新了一帧。内部的线程协同对 Ruby 脚本完全透明。
+当前落地位置：
 
-## 极端情况
+- `crates/mkxp-window/src/main.rs`
+  - `RuntimeEvent::ScriptFrameReady`
+  - `FrameSync`
+  - `SharedRuntime`
+  - `App::render_if_script_ready`
+  - `App::schedule_next_wake`
+  - `run_demo_script`
+- `crates/mkxp-window/src/window_control.rs`
+  - `WindowController`
+  - `WindowOutput`
+  - `window_mode` 同步和窗口级命令处理
+- `crates/mkxp-graphics/src/`
+  - `GraphicsState::update`
+  - viewport scale modes
+  - resize/surface reconfigure
 
-**Ruby 的一帧耗时超过一帧的时间**（比如加载大场景）：
-winit 的 `AboutToWait` 到达时 `frame_ready` 还是 `false`。
-`winit_render_and_signal()` 返回 false，winit 跳过渲染，
-继续处理窗口事件。等 Ruby 准备好后再渲染。表现为"卡顿但窗口不冻结"。
+当前 demo 线程不是最终脚本引擎，但它刻意模拟真实 RGSS 运行形状：
 
-**Ruby 出错**：异常的捕获和 mkxp-z 一样——Ruby 侧 `rgss_main` 的
-`rescue` 捕获所有异常，弹错误对话框。Reset 异常被特殊处理。
+```text
+mutate graphics state
+Graphics.update boundary
+block until render
+continue next script frame
+```
 
-**窗口最小化**：`wgpu::Surface::get_current_texture()` 返回
-`SurfaceError::Lost` 或 `Timeout`。winit 跳过渲染，等恢复。
-Ruby 线程不受影响，继续跑逻辑（但 `Graphics.update` 会立刻返回，
-不等待实际渲染）。
----
+因此后续接入 magnus 时，应优先替换 `run_demo_script` 和 binding 层，而不是重写
+winit/graphics 的帧循环。
 
-## 附录：双缓冲优化（搁置，等实测性能有问题再启用）
+## 测试策略
 
-当前 v1 方案是严格交替的：Ruby 跑逻辑时 winit 闲置，winit 渲染时 Ruby 阻塞。
-对于 RPG Maker 典型的 40fps 目标，每帧 25ms 预算中 Ruby 游戏逻辑通常只占几毫秒，
-串行交替的浪费可以接受。
+已覆盖的关键行为：
 
-如果实测发现性能瓶颈（例如大地图场景 Ruby 逻辑耗时接近帧预算），可启用场景图
-双缓冲：
+- `FrameSync` 会阻塞脚本线程直到 render finished。
+- `shutdown` 会释放阻塞中的脚本线程。
+- 脚本 panic payload 会保留字符串信息。
+- `WindowController` 覆盖 resize tracker、窗口模式同步、全屏进入/退出和菜单勾选状态。
+- `mkxp-graphics` 覆盖 fixed game coordinate 和 viewport scale mode 计算。
 
-- 场景图维护 front/back 两份状态
-- Ruby 始终修改 back，winit 始终读取 front
-- `Graphics.update()` 只交换缓冲区 + 发信号，不阻塞
-- Ruby 立刻进入下一帧逻辑，与 winit 的渲染并行
+后续接入真实 Ruby 后应补充：
 
-代价是一帧画面延迟（~25ms），对回合制/剧情驱动的 RPG Maker 游戏不可感知。
+- `Graphics.update` 绑定在 render 完成前不会返回。
+- 脚本 panic/exception 能传播到主线程的统一错误路径。
+- reset signal 在 `Graphics.update` 边界抛出，并不会破坏 graphics/window 状态。
+- 无输入、鼠标不动、窗口不动时，脚本 ready 仍能通过 user event 驱动稳定渲染。
+- 不同平台上默认 `Fifo` present mode 的窗口/全屏切换行为一致。
+
+## 非目标和暂缓项
+
+当前设计不做这些事：
+
+- 不让脚本线程直接持有或 present `wgpu::Surface`。
+- 不在 `WindowController` 中创建或持有 `GraphicsState`。
+- 不把普通游戏输入解释为窗口命令。
+- 不引入通用 runtime service registry。
+- 不启用场景图双缓冲。
+
+双缓冲可以作为未来性能优化：
+
+```text
+script writes back scene
+winit renders front scene
+Graphics.update swaps front/back
+```
+
+代价是一帧显示延迟和更复杂的资源生命周期。RPG Maker 典型场景下，当前严格交替模型更简单，
+也更接近 `Graphics.update` 作为同步点的脚本语义。
