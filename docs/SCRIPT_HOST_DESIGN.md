@@ -36,8 +36,8 @@ is stable, the more likely crates are:
 The host exposes a small `ScriptEngine` trait:
 
 ```rust
-trait ScriptEngine: Send + 'static {
-    fn run(self: Box<Self>, ctx: ScriptContext) -> ScriptRunResult;
+trait ScriptEngine: Default + Send + 'static {
+    fn run(self, ctx: ScriptContext) -> ScriptRunResult;
 }
 ```
 
@@ -56,8 +56,8 @@ struct RubyScriptEngine;
 The thread spawn path should not know which engine it runs:
 
 ```rust
-spawn_script_thread(Box::new(DemoScriptEngine), runtime, proxy);
-spawn_script_thread(Box::new(RubyScriptEngine::new(...)), runtime, proxy);
+spawn_script_thread(DemoScriptEngine::default(), runtime, proxy);
+spawn_script_thread(RubyScriptEngine::default(), runtime, proxy);
 ```
 
 ## ScriptContext
@@ -135,19 +135,23 @@ Implemented in `crates/mkxp-window/src/script_host.rs`:
 - `spawn_script_thread` owns thread spawn, panic capture, result recording, and
   the final `RuntimeEvent::ScriptExited` wakeup.
 
-`App` still owns winit, graphics bootstrap, `SharedRuntime`, `WindowController`,
-and shutdown/drop ordering. Today it chooses which engine to spawn:
+`App<E>` still owns winit, graphics bootstrap, `SharedRuntime`,
+`WindowController`, and shutdown/drop ordering. The binary selects the engine
+type at startup:
 
 ```rust
-spawn_script_thread(Box::new(DemoScriptEngine), runtime, proxy);
+let mut app = App::<DemoScriptEngine>::new(proxy);
 ```
+
+Each script launch uses `E::default()`, so restart can create a fresh engine
+instance without changing the window/render host.
 
 ## Remaining migration work
 
 1. Keep all script host types private to `mkxp-window` until Ruby bindings need
    them across crate boundaries.
-2. Replace `DemoScriptEngine` construction with `RubyScriptEngine::new(...)`
-   when `mkxp-binding` owns the real RGSS runtime.
+2. Replace the binary's `App::<DemoScriptEngine>` selection with the real Ruby
+   engine type when `mkxp-binding` owns the real RGSS runtime.
 3. When audio/fs/input bindings land, promote only stable service handles to
    `mkxp-runtime` or a similarly named crate.
 

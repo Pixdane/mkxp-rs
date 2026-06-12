@@ -12,15 +12,18 @@ use crate::error::{ScriptError, ScriptExit, ScriptRunResult, panic_payload_to_st
 use crate::runtime::{RuntimeConfig, RuntimeEvent, SharedRuntime};
 use crate::window_control::{GAME_H, GAME_W};
 
-pub(crate) trait ScriptEngine: Send + 'static {
-    fn run(self: Box<Self>, ctx: ScriptContext) -> ScriptRunResult;
+pub(crate) trait ScriptEngine: Default + Send + 'static {
+    fn run(self, ctx: ScriptContext) -> ScriptRunResult;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScriptFrameAction {
     Continue,
     Shutdown,
-    #[allow(dead_code, reason = "restart is wired in the next runtime-control task")]
+    #[allow(
+        dead_code,
+        reason = "restart is wired in the next runtime-control task"
+    )]
     Restart,
 }
 
@@ -56,10 +59,11 @@ impl ScriptContext {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct DemoScriptEngine;
 
 impl ScriptEngine for DemoScriptEngine {
-    fn run(self: Box<Self>, ctx: ScriptContext) -> ScriptRunResult {
+    fn run(self, ctx: ScriptContext) -> ScriptRunResult {
         let mut x = 220.0_f32;
         let mut y = 165.0_f32;
         let mut dx = 2.0_f32;
@@ -97,8 +101,8 @@ impl ScriptEngine for DemoScriptEngine {
     }
 }
 
-pub(crate) fn spawn_script_thread(
-    engine: Box<dyn ScriptEngine>,
+pub(crate) fn spawn_script_thread<E: ScriptEngine>(
+    engine: E,
     runtime: Arc<SharedRuntime>,
     proxy: EventLoopProxy<RuntimeEvent>,
 ) -> JoinHandle<()> {
@@ -135,5 +139,11 @@ mod tests {
         let result = catch_script_unwind(|| panic!("boom"));
 
         assert_eq!(result, Err(ScriptError::Panic("boom".to_string())));
+    }
+
+    #[test]
+    fn demo_script_engine_can_be_created_for_each_run() {
+        let _first = DemoScriptEngine;
+        let _second = DemoScriptEngine::default();
     }
 }

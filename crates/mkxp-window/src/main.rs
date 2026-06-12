@@ -12,6 +12,7 @@ use mkxp_types::MkxpError;
 
 use crate::app::App;
 use crate::runtime::RuntimeEvent;
+use crate::script_host::DemoScriptEngine;
 
 fn main() -> anyhow::Result<()> {
     mkxp_log::init(mkxp_log::LogConfig::default())?;
@@ -20,7 +21,7 @@ fn main() -> anyhow::Result<()> {
         .build()
         .map_err(|error| MkxpError::Init(format!("failed to create event loop: {error}")))?;
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy);
+    let mut app = App::<DemoScriptEngine>::new(proxy);
     event_loop
         .run_app(&mut app)
         .map_err(|error| MkxpError::Runtime(format!("event loop error: {error}")))?;

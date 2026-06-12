@@ -343,13 +343,15 @@ loop:
 The `ScriptEngine` trait remains the replacement boundary:
 
 ```rust
-trait ScriptEngine: Send + 'static {
-    fn run(self: Box<Self>, ctx: ScriptContext) -> ScriptRunResult;
+trait ScriptEngine: Default + Send + 'static {
+    fn run(self, ctx: ScriptContext) -> ScriptRunResult;
 }
 ```
 
-The future Ruby engine should replace `DemoScriptEngine`, not the render host
-or window host.
+The binary selects the engine with `App::<DemoScriptEngine>::new(proxy)` today.
+Restart and future engine swaps create fresh instances through `E::default()`,
+so the future Ruby engine should replace the selected `App<E>` type, not the
+render host or window host.
 
 ## Error and Exit Flow
 

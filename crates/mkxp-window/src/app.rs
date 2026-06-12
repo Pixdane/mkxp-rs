@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -13,12 +14,13 @@ use tracing::{error, info};
 use crate::error::{ScriptExit, WindowError};
 use crate::render_host::{RenderCommand, RenderError, spawn_render_thread};
 use crate::runtime::{RuntimeEvent, SharedRuntime};
-use crate::script_host::{DemoScriptEngine, spawn_script_thread};
+use crate::script_host::{ScriptEngine, spawn_script_thread};
 use crate::window_control::{GAME_H, GAME_W, WindowConfig, WindowController, WindowOutput};
 
 // ── App ──
 
-pub(crate) struct App {
+pub(crate) struct App<E: ScriptEngine> {
+    _engine: PhantomData<E>,
     event_loop_proxy: EventLoopProxy<RuntimeEvent>,
     runtime: Option<Arc<SharedRuntime>>,
     script_thread: Option<JoinHandle<()>>,
@@ -28,9 +30,10 @@ pub(crate) struct App {
     fatal_error: Option<WindowError>,
 }
 
-impl App {
+impl<E: ScriptEngine> App<E> {
     pub(crate) fn new(event_loop_proxy: EventLoopProxy<RuntimeEvent>) -> Self {
         Self {
+            _engine: PhantomData,
             event_loop_proxy,
             runtime: None,
             script_thread: None,
@@ -44,7 +47,7 @@ impl App {
 
 // ── ApplicationHandler ──
 
-impl ApplicationHandler<RuntimeEvent> for App {
+impl<E: ScriptEngine> ApplicationHandler<RuntimeEvent> for App<E> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Err(error) = self.try_resumed(event_loop) {
             error!(%error, "window runtime initialisation failed");
@@ -90,7 +93,7 @@ impl ApplicationHandler<RuntimeEvent> for App {
 
 // ── Initialization ──
 
-impl App {
+impl<E: ScriptEngine> App<E> {
     fn try_resumed(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WindowError> {
         if self.runtime.is_some() {
             return Ok(());
@@ -144,11 +147,8 @@ impl App {
         let (render_tx, render_rx) = mpsc::channel();
 
         // Spawn the script thread.
-        let script_thread = spawn_script_thread(
-            Box::new(DemoScriptEngine),
-            runtime.clone(),
-            self.event_loop_proxy.clone(),
-        );
+        let script_thread =
+            spawn_script_thread(E::default(), runtime.clone(), self.event_loop_proxy.clone());
 
         // Spawn the render thread.
         let render_thread =
@@ -166,7 +166,7 @@ impl App {
 
 // ── Event helpers ──
 
-impl App {
+impl<E: ScriptEngine> App<E> {
     fn apply_window_outputs(&mut self, event_loop: &ActiveEventLoop, outputs: Vec<WindowOutput>) {
         for output in outputs {
             match output {
@@ -279,7 +279,7 @@ impl App {
     }
 }
 
-impl Drop for App {
+impl<E: ScriptEngine> Drop for App<E> {
     fn drop(&mut self) {
         self.shutdown();
     }
