@@ -186,10 +186,16 @@ Required operations:
 
 ```rust
 impl FrameSync {
-    fn script_frame_ready_and_wait(&self, shutdown: &AtomicBool) -> bool;
+    fn script_frame_ready_and_wait(&self, shutdown: &AtomicBool) -> ScriptFrameAction;
     fn wait_for_ready_or_shutdown(&self, shutdown: &AtomicBool) -> FrameWait;
     fn render_finished(&self);
     fn wake_all(&self);
+}
+
+enum ScriptFrameAction {
+    Continue,
+    Shutdown,
+    Restart,
 }
 
 enum FrameWait {
@@ -199,8 +205,9 @@ enum FrameWait {
 ```
 
 The script side no longer needs to wake winit for normal per-frame rendering.
-`ScriptContext::graphics_update()` should call `script_frame_ready_and_wait()`
-and block until the render thread calls `render_finished()`.
+`ScriptContext::submit_frame_and_wait()` should call
+`script_frame_ready_and_wait()` and block until the render thread calls
+`render_finished()` or runtime control requests shutdown/restart.
 
 The render side blocks on the same `Condvar`. It wakes when:
 
@@ -329,7 +336,7 @@ loop:
   update game state
   mutate graphics state
   Graphics.update
-    -> ScriptContext::graphics_update()
+    -> ScriptContext::submit_frame_and_wait()
     -> block until render thread presents the frame
 ```
 
@@ -553,8 +560,8 @@ Steps:
 Files:
 
 - Modify `docs/FRAME_LOOP_DESIGN.md`
-- Modify `docs/SCRIPT_HOST_DESIGN.md` if `ScriptContext::graphics_update()`
-  stops sending winit user events.
+- Modify `docs/SCRIPT_HOST_DESIGN.md` if `ScriptContext::submit_frame_and_wait()`
+  changes its runtime-control semantics.
 - Modify `docs/WINDOW_CONTROLLER_DESIGN.md` if `App` no longer applies
   `WindowOutput` directly to `GraphicsState`.
 - Modify tests in `crates/mkxp-window/src/main.rs` and new render host tests.

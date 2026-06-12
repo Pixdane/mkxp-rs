@@ -2,6 +2,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use crate::script_host::ScriptFrameAction;
+
 /// Outcome of waiting for a script frame on the render side.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -40,8 +42,9 @@ impl FrameSync {
     /// The former `wake_event_loop` callback has been removed; the
     /// render thread waits on a separate Condvar in `wait_for_ready_or_shutdown`.
     ///
-    /// Returns `true` if the loop should continue (no shutdown observed).
-    pub(crate) fn script_frame_ready_and_wait(&self, shutdown: &AtomicBool) -> bool {
+    /// Returns the next script-side action after the frame is rendered or the
+    /// runtime control state changes.
+    pub(crate) fn script_frame_ready_and_wait(&self, shutdown: &AtomicBool) -> ScriptFrameAction {
         let mut state = self.state.lock().unwrap();
         state.ready = true;
         state.ready_at = Some(Instant::now());
@@ -51,7 +54,11 @@ impl FrameSync {
             state = self.cv.wait(state).unwrap();
         }
 
-        !shutdown.load(Ordering::Acquire)
+        if shutdown.load(Ordering::Acquire) {
+            ScriptFrameAction::Shutdown
+        } else {
+            ScriptFrameAction::Continue
+        }
     }
 
     /// Called from the render thread to block until a frame is ready for
@@ -123,8 +130,8 @@ mod tests {
         let script_shutdown = shutdown.clone();
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
-            let keep_running = script_sync.script_frame_ready_and_wait(&script_shutdown);
-            done_tx.send(keep_running).unwrap();
+            let action = script_sync.script_frame_ready_and_wait(&script_shutdown);
+            done_tx.send(action).unwrap();
         });
 
         ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -134,7 +141,10 @@ mod tests {
         assert!(done_rx.try_recv().is_err());
 
         sync.render_finished();
-        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            ScriptFrameAction::Continue
+        );
         handle.join().unwrap();
     }
 
@@ -149,8 +159,8 @@ mod tests {
         let script_shutdown = shutdown.clone();
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
-            let keep_running = script_sync.script_frame_ready_and_wait(&script_shutdown);
-            done_tx.send(keep_running).unwrap();
+            let action = script_sync.script_frame_ready_and_wait(&script_shutdown);
+            done_tx.send(action).unwrap();
         });
 
         ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -160,7 +170,10 @@ mod tests {
 
         shutdown.store(true, Ordering::Release);
         sync.wake_all();
-        assert!(!done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            ScriptFrameAction::Shutdown
+        );
         handle.join().unwrap();
     }
 
@@ -202,7 +215,10 @@ mod tests {
 
         assert!(done_rx.recv_timeout(Duration::from_millis(20)).is_err());
         sync.render_finished();
-        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            ScriptFrameAction::Continue
+        );
 
         render_handle.join().unwrap();
         script_handle.join().unwrap();

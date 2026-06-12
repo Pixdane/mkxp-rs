@@ -16,6 +16,14 @@ pub(crate) trait ScriptEngine: Send + 'static {
     fn run(self: Box<Self>, ctx: ScriptContext) -> ScriptRunResult;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScriptFrameAction {
+    Continue,
+    Shutdown,
+    #[allow(dead_code, reason = "restart is wired in the next runtime-control task")]
+    Restart,
+}
+
 pub(crate) struct ScriptContext {
     runtime: Arc<SharedRuntime>,
 }
@@ -33,7 +41,7 @@ impl ScriptContext {
         f(&mut self.runtime.graphics.lock().unwrap())
     }
 
-    pub(crate) fn graphics_update(&self) -> bool {
+    pub(crate) fn submit_frame_and_wait(&self) -> ScriptFrameAction {
         self.runtime
             .frame_sync
             .script_frame_ready_and_wait(&self.runtime.shutdown)
@@ -66,8 +74,10 @@ impl ScriptEngine for DemoScriptEngine {
                 graphics.set_test_quad(x, y, 200.0, 150.0, r, g, b);
             });
 
-            if !ctx.graphics_update() {
-                return Ok(ScriptExit::ShutdownRequested);
+            match ctx.submit_frame_and_wait() {
+                ScriptFrameAction::Continue => {}
+                ScriptFrameAction::Shutdown => return Ok(ScriptExit::ShutdownRequested),
+                ScriptFrameAction::Restart => return Ok(ScriptExit::ShutdownRequested),
             }
         }
 

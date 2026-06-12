@@ -72,20 +72,21 @@ Initial methods:
 impl ScriptContext {
     fn is_shutdown_requested(&self) -> bool;
     fn with_graphics<T>(&self, f: impl FnOnce(&mut GraphicsState) -> T) -> T;
-    fn graphics_update(&self) -> bool;
+    fn submit_frame_and_wait(&self) -> ScriptFrameAction;
 }
 ```
 
-`graphics_update()` is the important boundary: it sets the frame-ready flag,
-blocks on `FrameSync`, and returns `false` when shutdown was requested. A real
-Ruby `Graphics.update` binding should call this method rather than directly
-touching `FrameSync`, render host internals, or winit.
+`submit_frame_and_wait()` is the important boundary: it sets the frame-ready
+flag, blocks on `FrameSync`, and returns a `ScriptFrameAction` when runtime
+control should continue, shut down, or restart. A real Ruby `Graphics.update`
+binding should call this method rather than directly touching `FrameSync`,
+render host internals, or winit.
 
-In the old winit-main-thread render loop, `graphics_update()` also sent
-`RuntimeEvent::ScriptFrameReady` so the main thread would wake and render. In the
-render-host design, normal per-frame wakeup is the `FrameSync` condvar consumed
-by the render thread. Winit user events should remain for script exit, fatal
-errors, and explicit host notifications, not for every rendered frame.
+In the old winit-main-thread render loop, the script-facing frame boundary also
+sent `RuntimeEvent::ScriptFrameReady` so the main thread would wake and render.
+In the render-host design, normal per-frame wakeup is the `FrameSync` condvar
+consumed by the render thread. Winit user events should remain for script exit,
+fatal errors, and explicit host notifications, not for every rendered frame.
 
 ## Future service growth
 
@@ -130,7 +131,7 @@ Implemented in `crates/mkxp-window/src/script_host.rs`:
 - `ScriptEngine` owns the script entry point.
 - `ScriptContext` hides `Arc<SharedRuntime>` and any host notification handles.
 - `DemoScriptEngine` contains the old demo loop and calls
-  `ctx.with_graphics(...)` plus `ctx.graphics_update()`.
+  `ctx.with_graphics(...)` plus `ctx.submit_frame_and_wait()`.
 - `spawn_script_thread` owns thread spawn, panic capture, result recording, and
   the final `RuntimeEvent::ScriptExited` wakeup.
 
