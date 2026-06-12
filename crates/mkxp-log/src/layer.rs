@@ -2,7 +2,7 @@ use crate::{LogError, LogTarget};
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 use std::sync::Mutex;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
@@ -55,18 +55,8 @@ where
 
         // --- Timestamp (ISO 8601 with local offset) ---
         let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let _ = write!(
-            buf,
-            "[{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}{offset}] ",
-            year = now.year(),
-            month = now.month() as u8,
-            day = now.day(),
-            hour = now.hour(),
-            minute = now.minute(),
-            second = now.second(),
-            millis = now.millisecond(),
-            offset = now.offset(),
-        );
+        write_timestamp(&mut buf, now);
+        buf.push(' ');
 
         // --- Level (right-padded to 5 chars) ---
         let meta = event.metadata();
@@ -122,13 +112,8 @@ where
         // Format a log line announcing the span.
         let mut buf = String::with_capacity(128);
         let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let _ = write!(
-            buf,
-            "[{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}{offset}] ",
-            year = now.year(), month = now.month() as u8, day = now.day(),
-            hour = now.hour(), minute = now.minute(), second = now.second(),
-            millis = now.millisecond(), offset = now.offset(),
-        );
+        write_timestamp(&mut buf, now);
+        buf.push(' ');
 
         let meta = attrs.metadata();
         let _ = write!(buf, "SPAN+ {:<5} ", meta.level().as_str());
@@ -175,13 +160,8 @@ where
 
         let mut buf = String::with_capacity(128);
         let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let _ = write!(
-            buf,
-            "[{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}{offset}] ",
-            year = now.year(), month = now.month() as u8, day = now.day(),
-            hour = now.hour(), minute = now.minute(), second = now.second(),
-            millis = now.millisecond(), offset = now.offset(),
-        );
+        write_timestamp(&mut buf, now);
+        buf.push(' ');
 
         let meta = span.metadata();
         let _ = write!(buf, "SPAN- {:<5} ", meta.level().as_str());
@@ -204,6 +184,31 @@ where
             let _ = w.write_all(buf.as_bytes());
         }
     }
+}
+
+fn write_timestamp(buf: &mut String, now: OffsetDateTime) {
+    let _ = write!(
+        buf,
+        "[{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}{offset}]",
+        year = now.year(),
+        month = now.month() as u8,
+        day = now.day(),
+        hour = now.hour(),
+        minute = now.minute(),
+        second = now.second(),
+        millis = now.millisecond(),
+        offset = format_offset(now.offset()),
+    );
+}
+
+fn format_offset(offset: UtcOffset) -> String {
+    let seconds = offset.whole_seconds();
+    let sign = if seconds < 0 { '-' } else { '+' };
+    let seconds = seconds.abs();
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+
+    format!("{sign}{hours:02}:{minutes:02}")
 }
 
 // ---------------------------------------------------------------------------

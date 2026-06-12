@@ -15,7 +15,7 @@ cross-platform runtime for RPG Maker XP / VX / VX Ace games.  Licensed GPL-2.0.
 | `mkxp-audio` | `crates/mkxp-audio/` | 40 unit + 12 doc | BGM/BGS/ME/SE + MIDI. kira (mixing) + rustysynth (SoundFont MIDI). Zero C deps. |
 | `mkxp-log` | `crates/mkxp-log/` | 23 unit + 13 doc | tracing-based logger. `MkxpLayer` (ISO 8601 + span lifecycle). EnvFilter, Composite targets, From<&Config>. |
 | `mkxp-graphics` | `crates/mkxp-graphics/` | Unit tests in crate | wgpu renderer, fixed game coordinate system, viewport scale modes. Does not depend on winit. |
-| `mkxp-window` | `crates/mkxp-window/` | 21 unit | Binary crate. `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput` for `App` to apply to graphics. Demo logic uses a `FrameSync` script-thread shape matching `FRAME_LOOP_DESIGN.md`. |
+| `mkxp-window` | `crates/mkxp-window/` | 27 unit | Binary crate. `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput` for `App` to apply to graphics. Demo logic uses a `FrameSync` script-thread shape matching `FRAME_LOOP_DESIGN.md`, with `ScriptRunResult` propagated through `WindowError` to the winit thread and binary `anyhow` entry. |
 
 Next major crate: `mkxp-binding` (magnus Ruby MRI).
 

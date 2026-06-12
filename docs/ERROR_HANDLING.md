@@ -26,6 +26,7 @@ anyhow::Result                     ← binary 入口（兜底，只管 ? 不管�
     ↑
     ├── mkxp_config::SourceError   ← 配置解析特有 + #[from] MkxpError
     ├── mkxp_fs::FsError           ← 文件系统特有 + #[from] MkxpError
+    ├── mkxp_window::WindowError   ← 窗口/bootstrap/script thread 特有 + #[from] MkxpError
     ├── (mkxp_graphics::GfxError)  ← 未来
     ├── (mkxp_audio::AudioError)   ← 未来
     └── (mkxp_binding::BindError)  ← 未来
@@ -38,7 +39,7 @@ anyhow::Result                     ← binary 入口（兜底，只管 ? 不管�
 | 层级 | 类型 | 角色 |
 |------|------|------|
 | Shared | `MkxpError` | 所有 crate 都认的通用错误类别，消灭重复 |
-| Crate | `FsError`, `SourceError`, ... | 本 crate 独有的错误变体 + 转发共享词汇 |
+| Crate | `FsError`, `SourceError`, `WindowError`, ... | 本 crate 独有的错误变体 + 转发共享词汇 |
 | Binary | `anyhow::Result` | 万能 `?`，从不 inspect 具体变体 |
 
 ---
@@ -174,6 +175,12 @@ fn main() -> anyhow::Result<()> {
 ```
 
 入口层永远不需要 `match` 错误变体。
+
+`mkxp-window` 是 binary crate，但仍然保留一个小型 `WindowError`，用于表达
+winit/wgpu bootstrap 和脚本线程退出这些入口层内部的领域错误。winit
+`ApplicationHandler` 回调本身不能返回 `Result`，所以运行期脚本错误先记录在
+`App` 中，调用 `event_loop.exit()`，等 `run_app()` 返回后再交给
+`anyhow::Result`。
 
 ---
 

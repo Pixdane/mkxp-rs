@@ -9,6 +9,8 @@ name = "mkxp-window"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1"
+mkxp-types = { path = "../mkxp-types" }
 mkxp-log = { path = "../mkxp-log" }
 mkxp-graphics = { path = "../mkxp-graphics" }
 winit = "0.30"
@@ -16,4 +18,5 @@ wgpu = "24"
 pollster = "0.4"
 muda = "0.15"
 crossbeam-channel = "0.5"
+thiserror = "2"
 tracing = "0.1"

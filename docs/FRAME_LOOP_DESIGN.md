@@ -51,6 +51,9 @@ script thread
     set ready = true
     send RuntimeEvent::ScriptFrameReady
     block on Condvar
+  when script engine returns:
+    store ScriptRunResult
+    send RuntimeEvent::ScriptExited
 
 winit main thread
   EventLoop<RuntimeEvent>::run_app
@@ -85,7 +88,7 @@ SharedRuntime
   owns:
     Mutex<GraphicsState>
     FrameSync
-    script_failure
+    script_outcome
     shutdown
 
 WindowController
@@ -153,8 +156,9 @@ winit 侧：
 
 ```rust
 fn render_if_script_ready() {
-    if script_failure {
-        panic on main thread;
+    if script_outcome {
+        handle script exit on main thread;
+        return;
     }
 
     if !ready || now < next_frame_at {
@@ -286,21 +290,49 @@ winit wake
 
 ## Panic、退出和重置
 
-脚本线程 panic 不应只停在后台线程里。当前 demo thread 用 `catch_unwind` 捕获 panic：
+脚本线程退出结果不应只停在后台线程里。脚本入口返回 `ScriptRunResult`：
+
+```rust
+type ScriptRunResult = Result<ScriptExit, ScriptError>;
+```
+
+线程结束时会把结果写入 `script_outcome`，并发送 `RuntimeEvent::ScriptExited` 唤醒
+winit 主线程。主线程统一消费结果：
+
+```text
+ScriptExit::Finished
+  -> log info
+  -> event_loop.exit()
+
+ScriptExit::ShutdownRequested
+  -> log info
+  -> event_loop.exit()
+
+ScriptError::Message(...)
+  -> convert to WindowError
+  -> log/display error
+  -> event_loop.exit()
+```
+
+脚本线程 panic 也走同一条路径。当前 demo thread 用 `catch_unwind` 捕获 panic：
 
 ```text
 script panic
-  -> record_script_panic(message)
+  -> record ScriptError::Panic(message)
   -> shutdown = true
   -> wake FrameSync
-  -> send ScriptFrameReady
+  -> send ScriptExited
 
 winit next tick
-  -> take_script_failure()
-  -> panic!("script thread panicked: ...")
+  -> take script_outcome
+  -> convert to WindowError::ScriptPanic
+  -> log/display panic message
+  -> event_loop.exit()
 ```
 
-这样主线程会带着脚本错误失败，便于日志、崩溃报告和未来错误对话框统一处理。
+这样主线程会展示脚本错误并走正常程序收尾，而不是让后台线程静默结束。因为
+`ApplicationHandler` 回调不能返回 `Result`，错误会暂存在 `App.fatal_error`；
+`run_app()` 返回后，binary 入口再把它作为 `anyhow::Result` 返回。
 
 正常退出：
 
@@ -378,14 +410,14 @@ winit/graphics 的帧循环。
 
 - `FrameSync` 会阻塞脚本线程直到 render finished。
 - `shutdown` 会释放阻塞中的脚本线程。
-- 脚本 panic payload 会保留字符串信息。
+- 脚本正常结束、脚本错误和 panic payload 会被记录成 `ScriptRunResult` 并只消费一次。
 - `WindowController` 覆盖 resize tracker、窗口模式同步、全屏进入/退出和菜单勾选状态。
 - `mkxp-graphics` 覆盖 fixed game coordinate 和 viewport scale mode 计算。
 
 后续接入真实 Ruby 后应补充：
 
 - `Graphics.update` 绑定在 render 完成前不会返回。
-- 脚本 panic/exception 能传播到主线程的统一错误路径。
+- Ruby exception 能转成 `ScriptError::Message` 并进入主线程统一展示/退出路径。
 - reset signal 在 `Graphics.update` 边界抛出，并不会破坏 graphics/window 状态。
 - 无输入、鼠标不动、窗口不动时，脚本 ready 仍能通过 user event 驱动稳定渲染。
 - 不同平台上默认 `Fifo` present mode 的窗口/全屏切换行为一致。

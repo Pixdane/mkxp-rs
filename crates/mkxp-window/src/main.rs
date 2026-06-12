@@ -12,14 +12,19 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
 use mkxp_graphics::GraphicsState;
+use mkxp_types::MkxpError;
+use tracing::{error, info};
 
-use crate::window_control::{GAME_H, GAME_W, WindowConfig, WindowController, WindowOutput};
+use crate::window_control::{
+    GAME_H, GAME_W, WindowConfig, WindowController, WindowControllerError, WindowOutput,
+};
 
 const DEFAULT_FPS: u32 = 60;
 
 #[derive(Debug, Clone, Copy)]
 enum RuntimeEvent {
     ScriptFrameReady,
+    ScriptExited,
 }
 
 /// Synchronizes one script-produced frame with one winit-thread render.
@@ -72,34 +77,149 @@ impl FrameSync {
 struct SharedRuntime {
     graphics: Mutex<GraphicsState>,
     frame_sync: FrameSync,
-    script_failure: Mutex<Option<String>>,
+    script_outcome: ScriptOutcomeSlot,
     shutdown: AtomicBool,
 }
 
-impl SharedRuntime {
-    fn record_script_panic(&self, payload: Box<dyn std::any::Any + Send>) {
-        *self.script_failure.lock().unwrap() = Some(panic_payload_to_string(payload));
-        self.shutdown.store(true, Ordering::Release);
-        // The main thread owns the event loop and user-visible failure path, so
-        // script panics are stored here and re-thrown from the next render tick.
-        self.frame_sync.wake_all();
-    }
+type ScriptRunResult = Result<ScriptExit, ScriptError>;
 
-    fn take_script_failure(&self) -> Option<String> {
-        self.script_failure.lock().unwrap().take()
+#[derive(Debug, thiserror::Error)]
+enum WindowError {
+    #[error(transparent)]
+    WindowController(#[from] WindowControllerError),
+    #[error("failed to create wgpu surface: {0}")]
+    CreateSurface(#[from] wgpu::CreateSurfaceError),
+    #[error("failed to request GPU device: {0}")]
+    RequestDevice(#[from] wgpu::RequestDeviceError),
+    #[error("script error: {0}")]
+    Script(String),
+    #[error("script thread panicked: {0}")]
+    ScriptPanic(String),
+    #[error(transparent)]
+    Mkxp(#[from] MkxpError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScriptExit {
+    Finished,
+    ShutdownRequested,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScriptError {
+    #[allow(
+        dead_code,
+        reason = "real Ruby exceptions will construct this once mkxp-binding is wired"
+    )]
+    Message(String),
+    Panic(String),
+}
+
+impl std::fmt::Display for ScriptExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Finished => f.write_str("script finished"),
+            Self::ShutdownRequested => f.write_str("script shutdown requested"),
+        }
     }
 }
 
-fn main() {
-    mkxp_log::init(mkxp_log::LogConfig::default()).expect("failed to initialise logger");
+impl std::fmt::Display for ScriptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Message(message) => f.write_str(message),
+            Self::Panic(message) => write!(f, "script thread panicked: {message}"),
+        }
+    }
+}
+
+impl From<ScriptError> for WindowError {
+    fn from(error: ScriptError) -> Self {
+        match error {
+            ScriptError::Message(message) => Self::Script(message),
+            ScriptError::Panic(message) => Self::ScriptPanic(message),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ScriptOutcomeSlot {
+    result: Mutex<Option<ScriptRunResult>>,
+}
+
+impl ScriptOutcomeSlot {
+    fn record(&self, result: ScriptRunResult) {
+        *self.result.lock().unwrap() = Some(result);
+    }
+
+    fn take(&self) -> Option<ScriptRunResult> {
+        self.result.lock().unwrap().take()
+    }
+}
+
+impl SharedRuntime {
+    fn new(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: wgpu::Surface<'static>,
+        surface_config: wgpu::SurfaceConfiguration,
+    ) -> Self {
+        Self {
+            graphics: Mutex::new(GraphicsState::new(
+                device,
+                queue,
+                surface,
+                surface_config,
+                GAME_W,
+                GAME_H,
+                DEFAULT_FPS,
+            )),
+            frame_sync: FrameSync::default(),
+            script_outcome: ScriptOutcomeSlot::default(),
+            shutdown: AtomicBool::new(false),
+        }
+    }
+
+    fn record_script_result(&self, result: ScriptRunResult) {
+        if result.is_err() {
+            self.shutdown.store(true, Ordering::Release);
+            self.frame_sync.wake_all();
+        }
+        self.script_outcome.record(result);
+    }
+
+    fn record_script_panic(&self, payload: Box<dyn std::any::Any + Send>) {
+        // The main thread owns the event loop and user-visible failure path, so
+        // script panics are stored here and handled from the next event-loop tick.
+        self.record_script_result(Err(ScriptError::Panic(panic_payload_to_string(payload))));
+    }
+
+    fn take_script_result(&self) -> Option<ScriptRunResult> {
+        self.script_outcome.take()
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    run()
+}
+
+fn run() -> anyhow::Result<()> {
+    mkxp_log::init(mkxp_log::LogConfig::default())?;
 
     let event_loop = EventLoop::<RuntimeEvent>::with_user_event()
         .build()
-        .expect("failed to create event loop");
+        .map_err(|error| MkxpError::Init(format!("failed to create event loop: {error}")))?;
     let proxy = event_loop.create_proxy();
+    let mut app = App::new(proxy);
     event_loop
-        .run_app(&mut App::new(proxy))
-        .expect("event loop error");
+        .run_app(&mut app)
+        .map_err(|error| MkxpError::Runtime(format!("event loop error: {error}")))?;
+
+    if let Some(error) = app.take_fatal_error() {
+        Err(error.into())
+    } else {
+        Ok(())
+    }
 }
 
 struct App {
@@ -107,6 +227,7 @@ struct App {
     runtime: Option<Arc<SharedRuntime>>,
     demo_thread: Option<JoinHandle<()>>,
     window: Option<WindowController>,
+    fatal_error: Option<WindowError>,
     next_frame_at: Instant,
 }
 
@@ -118,6 +239,7 @@ impl App {
             runtime: None,
             demo_thread: None,
             window: None,
+            fatal_error: None,
             next_frame_at: now,
         }
     }
@@ -125,86 +247,11 @@ impl App {
 
 impl ApplicationHandler<RuntimeEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.runtime.is_some() {
-            return;
+        if let Err(error) = self.try_resumed(event_loop) {
+            error!(%error, "window runtime initialisation failed");
+            self.fatal_error = Some(error);
+            event_loop.exit();
         }
-
-        let window = WindowController::new(event_loop, WindowConfig::default())
-            .expect("failed to create window controller");
-
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            ..Default::default()
-        });
-
-        let surface: wgpu::Surface<'static> = unsafe {
-            // Safety: `GraphicsState` is dropped before `WindowController` in
-            // `shutdown`, so the surface never outlives the winit window it was
-            // created from. The widened lifetime only mirrors that ownership.
-            std::mem::transmute(
-                instance
-                    .create_surface(window.window())
-                    .expect("failed to create surface"),
-            )
-        };
-
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .expect("no suitable GPU adapter");
-
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-                .expect("failed to create GPU device");
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface.get_capabilities(&adapter).formats[0],
-            width: GAME_W,
-            height: GAME_H,
-            // Keep presentation synchronized by default. Immediate presentation
-            // looked responsive on macOS but can tear during integer-scaled
-            // fullscreen exits; config-driven vsync can be wired later.
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-
-        let runtime = Arc::new(SharedRuntime {
-            graphics: Mutex::new(GraphicsState::new(
-                device,
-                queue,
-                surface,
-                surface_config,
-                GAME_W,
-                GAME_H,
-                DEFAULT_FPS,
-            )),
-            frame_sync: FrameSync::default(),
-            script_failure: Mutex::new(None),
-            shutdown: AtomicBool::new(false),
-        });
-
-        let demo_runtime = runtime.clone();
-        let demo_proxy = self.event_loop_proxy.clone();
-        let demo_thread = thread::spawn(move || {
-            let script_runtime = demo_runtime.clone();
-            let script_proxy = demo_proxy.clone();
-            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
-                run_demo_script(script_runtime, script_proxy);
-            })) {
-                demo_runtime.record_script_panic(payload);
-                // Wake winit even if it is sleeping until the next frame; the
-                // main thread should observe and report script failure promptly.
-                let _ = demo_proxy.send_event(RuntimeEvent::ScriptFrameReady);
-            }
-        });
-
-        self.runtime = Some(runtime);
-        self.demo_thread = Some(demo_thread);
-        self.window = Some(window);
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -229,8 +276,11 @@ impl ApplicationHandler<RuntimeEvent> for App {
                 // The user event wakes the OS event loop; it does not override
                 // `target_fps`. `render_if_script_ready` still gates rendering
                 // with `next_frame_at`, keeping script timing stable.
-                self.render_if_script_ready();
+                self.render_if_script_ready(event_loop);
                 self.schedule_next_wake(event_loop);
+            }
+            RuntimeEvent::ScriptExited => {
+                self.handle_script_exit(event_loop);
             }
         }
     }
@@ -241,8 +291,84 @@ impl ApplicationHandler<RuntimeEvent> for App {
             self.apply_window_outputs(event_loop, outputs);
         }
 
-        self.render_if_script_ready();
+        self.render_if_script_ready(event_loop);
         self.schedule_next_wake(event_loop);
+    }
+}
+
+impl App {
+    fn try_resumed(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WindowError> {
+        if self.runtime.is_some() {
+            return Ok(());
+        }
+
+        let window = WindowController::new(event_loop, WindowConfig::default())?;
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..Default::default()
+        });
+
+        let surface: wgpu::Surface<'static> = unsafe {
+            // Safety: `GraphicsState` is dropped before `WindowController` in
+            // `shutdown`, so the surface never outlives the winit window it was
+            // created from. The widened lifetime only mirrors that ownership.
+            std::mem::transmute(instance.create_surface(window.window())?)
+        };
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .ok_or_else(|| MkxpError::Init("no suitable GPU adapter".into()))?;
+
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))?;
+
+        let surface_format = surface
+            .get_capabilities(&adapter)
+            .formats
+            .first()
+            .copied()
+            .ok_or_else(|| MkxpError::Init("surface reported no supported formats".into()))?;
+
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: GAME_W,
+            height: GAME_H,
+            // Keep presentation synchronized by default. Immediate presentation
+            // looked responsive on macOS but can tear during integer-scaled
+            // fullscreen exits; config-driven vsync can be wired later.
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        let runtime = Arc::new(SharedRuntime::new(device, queue, surface, surface_config));
+
+        let demo_runtime = runtime.clone();
+        let demo_proxy = self.event_loop_proxy.clone();
+        let demo_thread = thread::spawn(move || {
+            let script_runtime = demo_runtime.clone();
+            let script_proxy = demo_proxy.clone();
+            match panic::catch_unwind(AssertUnwindSafe(|| {
+                run_demo_script(script_runtime, script_proxy)
+            })) {
+                Ok(result) => demo_runtime.record_script_result(result),
+                Err(payload) => demo_runtime.record_script_panic(payload),
+            }
+            // Wake winit even if it is sleeping until the next frame; the main
+            // thread should observe and report script completion promptly.
+            let _ = demo_proxy.send_event(RuntimeEvent::ScriptExited);
+        });
+
+        self.runtime = Some(runtime);
+        self.demo_thread = Some(demo_thread);
+        self.window = Some(window);
+
+        Ok(())
     }
 }
 
@@ -268,12 +394,12 @@ impl App {
         event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
     }
 
-    fn render_if_script_ready(&mut self) {
-        if let Some(runtime) = &self.runtime {
-            if let Some(message) = runtime.take_script_failure() {
-                panic!("script thread panicked: {message}");
-            }
+    fn render_if_script_ready(&mut self, event_loop: &ActiveEventLoop) {
+        if self.handle_script_exit(event_loop) {
+            return;
+        }
 
+        if let Some(runtime) = &self.runtime {
             // A script frame can become ready before the scheduled frame time.
             // Keep it blocked until the FPS gate opens instead of rendering
             // early and accidentally speeding up the game loop.
@@ -287,6 +413,35 @@ impl App {
             runtime.frame_sync.render_finished();
             self.next_frame_at = Instant::now() + Duration::from_nanos(1_000_000_000 / fps as u64);
         }
+    }
+
+    fn handle_script_exit(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let Some(runtime) = &self.runtime else {
+            return false;
+        };
+
+        let Some(result) = runtime.take_script_result() else {
+            return false;
+        };
+
+        match result {
+            Ok(ScriptExit::Finished) => info!("script engine finished"),
+            Ok(ScriptExit::ShutdownRequested) => info!("script engine stopped after shutdown"),
+            Err(error) => {
+                let error = WindowError::from(error);
+                error!(%error, "script engine exited with error");
+                self.fatal_error = Some(error);
+            }
+        }
+
+        runtime.shutdown.store(true, Ordering::Release);
+        runtime.frame_sync.wake_all();
+        event_loop.exit();
+        true
+    }
+
+    fn take_fatal_error(&mut self) -> Option<WindowError> {
+        self.fatal_error.take()
     }
 
     fn apply_window_outputs(&mut self, event_loop: &ActiveEventLoop, outputs: Vec<WindowOutput>) {
@@ -335,7 +490,10 @@ impl Drop for App {
     }
 }
 
-fn run_demo_script(runtime: Arc<SharedRuntime>, proxy: EventLoopProxy<RuntimeEvent>) {
+fn run_demo_script(
+    runtime: Arc<SharedRuntime>,
+    proxy: EventLoopProxy<RuntimeEvent>,
+) -> ScriptRunResult {
     let mut x = 220.0_f32;
     let mut y = 165.0_f32;
     let mut dx = 2.0_f32;
@@ -366,8 +524,14 @@ fn run_demo_script(runtime: Arc<SharedRuntime>, proxy: EventLoopProxy<RuntimeEve
                 let _ = proxy.send_event(RuntimeEvent::ScriptFrameReady);
             })
         {
-            break;
+            return Ok(ScriptExit::ShutdownRequested);
         }
+    }
+
+    if runtime.shutdown.load(Ordering::Acquire) {
+        Ok(ScriptExit::ShutdownRequested)
+    } else {
+        Ok(ScriptExit::Finished)
     }
 }
 
@@ -456,5 +620,61 @@ mod tests {
             panic_payload_to_string(Box::new("kaboom".to_string())),
             "kaboom".to_string()
         );
+    }
+
+    #[test]
+    fn shared_runtime_records_script_success_once() {
+        let slot = ScriptOutcomeSlot::default();
+
+        slot.record(Ok(ScriptExit::Finished));
+
+        assert_eq!(slot.take(), Some(Ok(ScriptExit::Finished)));
+        assert_eq!(slot.take(), None);
+    }
+
+    #[test]
+    fn script_outcome_slot_records_script_error() {
+        let slot = ScriptOutcomeSlot::default();
+
+        slot.record(Err(ScriptError::Message("ruby failed".to_string())));
+
+        assert_eq!(
+            slot.take(),
+            Some(Err(ScriptError::Message("ruby failed".to_string())))
+        );
+    }
+
+    #[test]
+    fn script_panic_payload_is_stored_as_error_result() {
+        let slot = ScriptOutcomeSlot::default();
+
+        slot.record(Err(ScriptError::Panic(panic_payload_to_string(Box::new(
+            "boom",
+        )))));
+        assert_eq!(
+            slot.take(),
+            Some(Err(ScriptError::Panic("boom".to_string())))
+        );
+    }
+
+    #[test]
+    fn window_error_displays_script_panic() {
+        let err = WindowError::ScriptPanic("boom".to_string());
+
+        assert_eq!(err.to_string(), "script thread panicked: boom");
+    }
+
+    #[test]
+    fn window_error_transparently_forwards_mkxp_error() {
+        let err = WindowError::from(mkxp_types::MkxpError::Runtime("bad state".to_string()));
+
+        assert_eq!(err.to_string(), "runtime error: bad state");
+    }
+
+    #[test]
+    fn script_error_converts_to_window_error() {
+        let err = WindowError::from(ScriptError::Message("ruby failed".to_string()));
+
+        assert_eq!(err.to_string(), "script error: ruby failed");
     }
 }
