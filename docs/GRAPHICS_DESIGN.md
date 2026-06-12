@@ -1179,13 +1179,13 @@ Ruby 绑定层                 winit 事件循环
 
 ## window host：事件循环集成
 
-当前窗口入口由 `mkxp-window` 的 library entry 负责：binary `main.rs` 只调用
-`mkxp_window::run_demo()`。`mkxp-graphics` 仍然是被调用者，不知道 winit 事件循环
+当前窗口入口由 `mkxp-gui` 的 library entry 负责：binary `main.rs` 只调用
+`mkxp_gui::run_demo()`。`mkxp-graphics` 仍然是被调用者，不知道 winit 事件循环
 或脚本引擎的存在。
 
 ```rust
 fn main() -> anyhow::Result<()> {
-    mkxp_window::run_demo()
+    mkxp_gui::run_demo()
 }
 ```
 
@@ -1202,7 +1202,7 @@ fn main() -> anyhow::Result<()> {
 `Graphics.update` 前修改脚本可见的图形状态；render thread 在 frame ready 后应用
 resize/viewport command 并调用 `GraphicsState::update()` present 当前帧。
 逻辑游戏尺寸由 `RuntimeConfig.game_size` 传入 `GraphicsState::new`，不由
-`mkxp-window` 的窗口策略常量决定。
+`mkxp-gui` 的窗口策略常量决定。
 
 ---
 
@@ -1276,7 +1276,7 @@ Ruby 对象持有 `Arc<SpriteData>`，SceneGraph 持有 `Weak<SpriteData>`。
 
 | 步骤 | 做什么 | 涉及的模块 | 状态 |
 |------|--------|-----------|------|
-| 1. 开窗 | wgpu + winit 初始化，清屏为纯色 | `GraphicsState` + `mkxp-window` | ✅ |
+| 1. 开窗 | wgpu + winit 初始化，清屏为纯色 | `GraphicsState` + `mkxp-gui` | ✅ |
 | 2. 纯色矩形 | 一个 Quad + FlatColor pipeline | `Quad` + `PipelineSet.flat_color` | ✅ |
 | 3. 贴图 | 加载 PNG，创建纹理，画纹理四边形 | `Bitmap` + `PipelineSet.simple` | |
 | 4. 移动 | 每帧改 transform，画动态精灵 | `Sprite` + `scene_graph.composite()` | |
@@ -1295,7 +1295,7 @@ Ruby 对象持有 `Arc<SpriteData>`，SceneGraph 持有 `Weak<SpriteData>`。
 - 纯函数单元测试（表面尺寸验证）
 - `#[instrument]` + `tracing` 日志
 
-`mkxp-window` crate（二进制）：
+`mkxp-gui` crate（二进制）：
 - winit 事件循环 → wgpu surface → GraphicsState 全链路
 - 测试线程通过 `Arc<Mutex<GraphicsState>>` 改背景色，验证跨线程通信
 

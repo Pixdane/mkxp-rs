@@ -1,6 +1,6 @@
 # Script Host 架构设计
 
-本文记录当前 `mkxp-window` 内部的 script host 边界。它的目标是把临时
+本文记录当前 `mkxp-gui` 内部的 script host 边界。它的目标是把临时
 demo script thread 替换成真正的 RGSS/Ruby engine 时，不把 winit、render host
 或窗口生命周期细节泄漏到脚本层。
 
@@ -10,9 +10,9 @@ demo script thread 替换成真正的 RGSS/Ruby engine 时，不把 winit、rend
 
 暂时不创建独立的 `mkxp-scripts` crate。
 
-script host 抽象继续放在 `crates/mkxp-window/src/script_host.rs`。当前 window
+script host 抽象继续放在 `crates/mkxp-gui/src/script_host.rs`。当前 window
 runtime 仍然拥有 winit、`FrameSync`、`GraphicsState`、render host、shutdown/drop
-顺序和 restart 流程，所以把 script host 留在 `mkxp-window` 内部是更诚实的边界。
+顺序和 restart 流程，所以把 script host 留在 `mkxp-gui` 内部是更诚实的边界。
 
 `mkxp-scripts` 这个名字也不够精确：它可能指 script 文件、`Scripts.rxdata` 加载、
 RGSS 字节码、Ruby runtime，或 RGSS API binding。等边界稳定后，更可能拆出的 crate
@@ -32,7 +32,7 @@ RGSS 字节码、Ruby runtime，或 RGSS API binding。等边界稳定后，更�
 
 ## 当前模块边界
 
-当前实现分布在几个 `mkxp-window` 内部模块：
+当前实现分布在几个 `mkxp-gui` 内部模块：
 
 ```text
 app.rs
@@ -319,7 +319,7 @@ ctx.request_shutdown();
 ## 剩余迁移工作
 
 1. 在 Ruby binding 真正需要跨 crate 使用之前，继续保持 script host 类型为
-   `mkxp-window` 私有。
+   `mkxp-gui` 私有。
 2. 接入真实 Ruby runtime 时，用 `RubyScriptEngine` 替换 binary/library 入口处的
    `App<DemoScriptEngine>`。
 3. Ruby `Graphics.update` binding 必须调用 `ScriptContext::submit_frame_and_wait()`，

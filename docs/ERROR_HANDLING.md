@@ -26,7 +26,7 @@ anyhow::Result                     ← binary 入口（兜底，只管 ? 不管�
     ↑
     ├── mkxp_config::SourceError   ← 配置解析特有 + #[from] MkxpError
     ├── mkxp_fs::FsError           ← 文件系统特有 + #[from] MkxpError
-    ├── mkxp_window::WindowError   ← 窗口/bootstrap/script thread 特有 + #[from] MkxpError
+    ├── mkxp_gui::WindowError      ← 窗口/bootstrap/script thread 特有 + #[from] MkxpError
     ├── (mkxp_graphics::GfxError)  ← 未来
     ├── (mkxp_audio::AudioError)   ← 未来
     └── (mkxp_binding::BindError)  ← 未来
@@ -176,7 +176,7 @@ fn main() -> anyhow::Result<()> {
 
 入口层永远不需要 `match` 错误变体。
 
-`mkxp-window` 现在有 library entry 和 thin binary，但仍然保留一个小型 `WindowError`，用于表达
+`mkxp-gui` 现在有 library entry 和 thin binary，但仍然保留一个小型 `WindowError`，用于表达
 winit/wgpu bootstrap、window controller、script host 和 render host 这些入口层内部的领域错误。
 winit `ApplicationHandler` 回调本身不能返回 `Result`，所以运行期脚本错误和 render fatal error
 会先记录在 outcome slot 或 `App::fatal_error` 中，再通过 `RuntimeEvent::ScriptExited` /

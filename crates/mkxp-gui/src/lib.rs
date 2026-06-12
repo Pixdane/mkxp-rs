@@ -1,4 +1,4 @@
-//! Window runtime entry point for the mkxp-rs demo host.
+//! GUI runtime entry point for the mkxp-rs demo host.
 //!
 //! This crate exposes the winit application as a library entry so the binary can
 //! stay thin and future binaries can choose a different script engine boundary
@@ -9,7 +9,7 @@
 //!
 //! ```no_run
 //! fn main() -> anyhow::Result<()> {
-//!     mkxp_window::run_demo()
+//!     mkxp_gui::run_demo()
 //! }
 //! ```
 
@@ -42,7 +42,7 @@ use crate::script_host::DemoScriptEngine;
 ///
 /// ```no_run
 /// fn main() -> anyhow::Result<()> {
-///     mkxp_window::run_demo()
+///     mkxp_gui::run_demo()
 /// }
 /// ```
 pub fn run_demo() -> anyhow::Result<()> {
@@ -58,7 +58,7 @@ pub fn run_demo() -> anyhow::Result<()> {
         target_fps = runtime_config.target_fps,
         vsync = runtime_config.vsync,
         reset_enabled = runtime_config.enable_reset,
-        "mkxp-window starting"
+        "mkxp-gui starting"
     );
     debug!(
         scripts_path = ?runtime_config.scripts_path,
@@ -80,7 +80,7 @@ pub fn run_demo() -> anyhow::Result<()> {
     if let Some(error) = app.take_fatal_error() {
         Err(error.into())
     } else {
-        info!("mkxp-window stopped cleanly");
+        info!("mkxp-gui stopped cleanly");
         Ok(())
     }
 }

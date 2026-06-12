@@ -1,6 +1,6 @@
 # Frame Loop 架构设计
 
-本文定义 `mkxp-window` 当前 frame loop 的线程模型。窗口行为见
+本文定义 `mkxp-gui` 当前 frame loop 的线程模型。窗口行为见
 [`WINDOW_CONTROLLER_DESIGN.md`](WINDOW_CONTROLLER_DESIGN.md) 和
 [`WINDOW_CONSTRAINTS.md`](WINDOW_CONSTRAINTS.md)。
 
@@ -328,12 +328,12 @@ App::exiting / fatal error / QuitRequested
 自动验证：
 
 ```text
-cargo fmt -p mkxp-window --check
-cargo test -p mkxp-window
-cargo test -p mkxp-window --doc
-cargo check -p mkxp-window
-cargo clippy -p mkxp-window --all-targets -- -D warnings
-cargo doc -p mkxp-window --no-deps
+cargo fmt -p mkxp-gui --check
+cargo test -p mkxp-gui
+cargo test -p mkxp-gui --doc
+cargo check -p mkxp-gui
+cargo clippy -p mkxp-gui --all-targets -- -D warnings
+cargo doc -p mkxp-gui --no-deps
 git diff --check
 ```
 
@@ -350,7 +350,7 @@ git diff --check
 “把 `WindowOutput` 路由为 `RenderCommand`” 等任务。当前代码已经完成这些迁移：
 
 - binary 入口已变为薄 `main.rs`。
-- `mkxp_window::run_demo()` 是 library 入口。
+- `mkxp_gui::run_demo()` 是 library 入口。
 - `App<E>` 持有 winit lifecycle。
 - `render_host.rs` 持有 render loop 和 frame timing。
 - `script_host.rs` 持有 `ScriptEngine` 边界。

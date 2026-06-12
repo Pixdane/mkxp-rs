@@ -17,9 +17,9 @@
 
 ```text
 binary main
-  calls mkxp_window::run_demo()
+  calls mkxp_gui::run_demo()
 
-mkxp_window::run_demo()
+mkxp_gui::run_demo()
   loads config
   initializes logging
   creates EventLoop<RuntimeEvent>
