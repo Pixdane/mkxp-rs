@@ -10,6 +10,8 @@ thread 替换成真实脚本线程，而不是改变帧同步模型。
   resize 和 `WindowOutput` 的职责边界。
 - [`WINDOW_CONSTRAINTS.md`](WINDOW_CONSTRAINTS.md)：窗口缩放、整数倍、全屏状态和
   菜单状态的行为规格。
+- [`SCRIPT_HOST_DESIGN.md`](SCRIPT_HOST_DESIGN.md)：脚本线程替换接口、
+  `ScriptContext` 和未来 runtime/binding crate 边界。
 
 ## 背景
 
