@@ -275,11 +275,15 @@ mkxp-z 中 Ruby 线程通过 `SDL_PushEvent()` 发用户事件给主线程
 
 ### 14. 帧渲染
 
-| mkxp-z | winit |
+| mkxp-z | mkxp-rs 目标设计 |
 |---|---|
-| RGSS 线程调 `Graphics::update()` | `AboutToWait` 中调 `graphics.update()` |
-| `fpsLimiter.delay()` | `ControlFlow::Wait`（vsync） |
-| `SDL_GL_SwapWindow` | `frame.present()` |
+| RGSS 线程调 `Graphics::update()` | script thread 在 `FrameSync` 设置 ready 并阻塞 |
+| `fpsLimiter.delay()` | render thread 持有 `next_frame_at` 做 FPS gate |
+| `SDL_GL_SwapWindow` | render thread 调 `GraphicsState::update()` / `frame.present()` |
+
+早期迁移草案曾计划在 winit `AboutToWait` 中渲染。macOS 输入法快速切换会让主线程长时间不回到
+winit handler，因此目标设计改为独立 render host thread。完整设计见
+[`FRAME_LOOP_DESIGN.md`](FRAME_LOOP_DESIGN.md)。
 
 ### 15. 应用前后台
 
@@ -313,29 +317,29 @@ mkxp-z 通过 `SDL_APP_WILLENTERBACKGROUND` 暂停音频。
   □ 7.  创建 GraphicsState（传入 Device/Queue/Surface）
   □ 8.  创建 AudioManager
   □ 9.  创建 Shared { graphics, input, signals, frame_sync, config }
-  □ 10. 启动 Ruby 线程（传入 Arc<Shared>）
+  □ 10. 启动 render thread（传入 Arc<Shared> + RenderCommand receiver）
+  □ 11. 启动 Ruby 线程（传入 Arc<Shared>）
 
 事件循环阶段：
-  □ 11. WindowEvent::Resized → graphics.on_resize()
-  □ 12. WindowEvent::CloseRequested → elwt.exit()
-  □ 13. WindowEvent::Focused(false) → 清空输入状态
-  □ 14. WindowEvent::KeyboardInput
+  □ 12. WindowEvent::Resized → RenderCommand::SurfaceResized
+  □ 13. WindowEvent::CloseRequested → elwt.exit()
+  □ 14. WindowEvent::Focused(false) → 清空输入状态
+  □ 15. WindowEvent::KeyboardInput
          - Alt+Enter → 切换全屏
          - F12 → signals.reset = true
          - F2 → 切换 FPS 显示
          - 其他 → input.keys[scancode] = pressed
-  □ 15. WindowEvent::CursorMoved / MouseInput / MouseWheel → input 原子变量
-  □ 16. [可选] gilrs 手柄事件 → input.controller
-  □ 17. [可选] Touch 事件
-  □ 18. AboutToWait：
-         a. frame_sync.wait_until_ruby_ready()
-         b. graphics.update()
-         c. frame_sync.signal_ruby()
+  □ 16. WindowEvent::CursorMoved / MouseInput / MouseWheel → input 原子变量
+  □ 17. [可选] gilrs 手柄事件 → input.controller
+  □ 18. [可选] Touch 事件
+  □ 19. AboutToWait：drain menu/window housekeeping only，不执行每帧 render
 
 退出阶段：
-  □ 19. signals.shutdown = true
-  □ 20. ruby_thread.join()
-  □ 21. 所有资源自动 Drop
+  □ 20. signals.shutdown = true
+  □ 21. RenderCommand::Shutdown + frame_sync.wake_all()
+  □ 22. ruby_thread.join()
+  □ 23. render_thread.join()
+  □ 24. graphics/runtime 先 drop，window 后 drop
 ```
 
 ---

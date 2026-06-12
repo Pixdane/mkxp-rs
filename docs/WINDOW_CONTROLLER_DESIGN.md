@@ -220,16 +220,21 @@ graphics viewport mode。
 这些不应交给 runtime 处理。否则 runtime 仍然需要理解窗口约束策略，
 `WindowController` 的封装就会漏出来。
 
-Runtime 只应用输出事件：
+Runtime 只解释输出事件。当前目标 frame-loop 中，窗口线程不直接调用
+`GraphicsState`；它把会影响渲染的输出转换成 `RenderCommand`，由 render host
+在下一帧前应用：
 
 ```rust
-fn apply_window_output(output: WindowOutput, graphics: &mut GraphicsState) {
+fn translate_window_output(
+    output: WindowOutput,
+    render_tx: &Sender<RenderCommand>,
+) -> Result<(), RenderCommandError> {
     match output {
         WindowOutput::SurfaceResized { width, height } => {
-            graphics.on_resize(width, height);
+            render_tx.send(RenderCommand::SurfaceResized { width, height })?;
         }
         WindowOutput::ViewportScaleModeChanged(mode) => {
-            graphics.set_viewport_scale_mode(mode);
+            render_tx.send(RenderCommand::ViewportScaleModeChanged(mode))?;
         }
         WindowOutput::QuitRequested => {
             // handled by App because it owns ActiveEventLoop
@@ -238,6 +243,8 @@ fn apply_window_output(output: WindowOutput, graphics: &mut GraphicsState) {
             // future InputService
         }
     }
+
+    Ok(())
 }
 ```
 
@@ -257,7 +264,8 @@ WindowEvent::Resized(1100, 800)
        request_inner_size(1067, 800, Coalesced)
      refresh menu checkmarks
   -> output SurfaceResized(1100, 800)
-  -> GraphicsState::on_resize(1100, 800)
+  -> RenderCommand::SurfaceResized(1100, 800)
+  -> render host applies GraphicsState::on_resize before the next frame
 ```
 
 注意输出的是 `1100x800`，不是修正目标 `1067x800`。
@@ -273,7 +281,8 @@ MenuCommand::IntegerScale(2)
 
 WindowEvent::Resized(1280, 960)
   -> output SurfaceResized(1280, 960)
-  -> GraphicsState::on_resize(1280, 960)
+  -> RenderCommand::SurfaceResized(1280, 960)
+  -> render host applies GraphicsState::on_resize before the next frame
 ```
 
 窗口模式下整数倍缩放不是 graphics viewport 状态。它只是一次性窗口 resize
@@ -287,7 +296,8 @@ MenuCommand::IntegerScale(3)
      fullscreen_scale_mode = Integer(3)
      refresh menu checkmarks
   -> output ViewportScaleModeChanged(Integer(3))
-  -> GraphicsState::set_viewport_scale_mode(Integer(3))
+  -> RenderCommand::ViewportScaleModeChanged(Integer(3))
+  -> render host applies GraphicsState::set_viewport_scale_mode before the next frame
 ```
 
 全屏模式下整数倍缩放是 graphics viewport 状态。
@@ -311,17 +321,19 @@ Alt+Enter while fullscreen
 
 ```rust
 struct App {
-    graphics: Option<GraphicsState>,
     window: Option<WindowController>,
+    render_tx: Sender<RenderCommand>,
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = WindowController::new(event_loop, WindowConfig::default())?;
         let graphics = create_graphics(window.window())?;
+        let (render_tx, render_rx) = channel();
+        spawn_render_thread(runtime, render_rx);
 
-        self.graphics = Some(graphics);
         self.window = Some(window);
+        self.render_tx = render_tx;
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
@@ -332,7 +344,6 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let outputs = self.window.as_mut().unwrap().on_about_to_wait();
         self.apply_window_outputs(event_loop, outputs);
-        self.graphics.as_mut().unwrap().update();
     }
 }
 ```
@@ -460,11 +471,10 @@ Runtime 再把命令分发给脚本、文件系统或 debug service。模块不�
   menu items、modifier 状态、宽高比锁定状态、全屏 scale mode 和 resize
   request tracker。
 - `WindowController` 不持有 `GraphicsState`，也不创建 wgpu resource。
-- `App` 负责 wgpu bootstrap、事件转发、`WindowOutput` 应用、graphics update
-  和 frame timing。当前 demo 逻辑已经按 `FRAME_LOOP_DESIGN.md` 的形状运行：
-  demo/script 线程修改 graphics 状态后在 `FrameSync` 同步点阻塞，winit 主线程
-  收到 `ScriptFrameReady` user event 后按 `target_fps` 节流渲染，渲染完成后再
-  唤醒它。
+- `App` 当前仍负责 wgpu bootstrap、事件转发、`WindowOutput` 应用、graphics update
+  和 frame timing。这是过渡状态。新的 `FRAME_LOOP_DESIGN.md` 要求 `App` 将
+  `WindowOutput` 转换为 `RenderCommand`，由 render host thread 应用到
+  `GraphicsState` 并执行每帧 render。
 - `App` 在退出时设置 shutdown、唤醒 demo/script 线程并 join，避免后台线程继续
   持有 `GraphicsState` 到 `WindowController` drop 之后。
 - `WindowOutput::SurfaceResized` 使用真实窗口尺寸；自动宽高比修正仍是

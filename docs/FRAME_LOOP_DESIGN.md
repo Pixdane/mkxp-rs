@@ -1,450 +1,605 @@
-# mkxp-rs 帧循环设计：脚本阻塞，winit 渲染
+# mkxp-rs Frame Loop Redesign: Script Thread, Render Thread, winit Main Thread
 
-本文档定义 mkxp-rs 中脚本线程、winit 事件循环和 graphics 渲染之间的帧同步协议。
-当前 `mkxp-window` demo 已经按这个形状运行；未来接入 magnus/RGSS 时，应把 demo
-thread 替换成真实脚本线程，而不是改变帧同步模型。
+This document defines the target frame-loop architecture after the macOS input
+source switching investigation on 2026-06-12.
 
-相关边界见：
-
-- [`WINDOW_CONTROLLER_DESIGN.md`](WINDOW_CONTROLLER_DESIGN.md)：窗口、菜单、全屏、
-  resize 和 `WindowOutput` 的职责边界。
-- [`WINDOW_CONSTRAINTS.md`](WINDOW_CONSTRAINTS.md)：窗口缩放、整数倍、全屏状态和
-  菜单状态的行为规格。
-- [`SCRIPT_HOST_DESIGN.md`](SCRIPT_HOST_DESIGN.md)：脚本线程替换接口、
-  `ScriptContext` 和未来 runtime/binding crate 边界。
-
-## 背景
-
-mkxp-z 的游戏逻辑以 RGSS 脚本循环为中心：
+The old design rendered on the winit main thread. That matched winit's
+`RedrawRequested` guidance, but it made every frame depend on AppKit returning
+control to `ApplicationHandler`. On macOS, rapid input-source switching
+(`CapsLock`, `Cmd+Space`, or equivalent system shortcuts) can keep the main
+thread inside AppKit/IMK long enough for script frames to wait hundreds or
+thousands of milliseconds before the winit handler observes them. Diagnostics
+showed delays such as:
 
 ```text
-RGSS 线程
-  loop do
-    Graphics.update
-    Input.update
-    $scene.update
-  end
-
-事件线程
-  SDL_WaitEvent
-  处理窗口、输入和平台事件
+script frame was ready before the main loop observed it script_wait_ms=5072
 ```
 
-`Graphics.update` 对脚本而言是“画面更新了一帧”的同步点。mkxp-z 内部通过
-OpenGL 上下文切换、事件线程和 RGSS 线程之间的同步原语完成这一点。
+No matching slow-render or slow-redraw-delivery warning appeared. The root
+problem is therefore not `wgpu` present time and not `request_redraw()` delivery
+after the app observes readiness. The problem is that the main thread may not
+observe script readiness at all while macOS is processing input-source changes.
 
-mkxp-rs 不能把渲染直接放进脚本线程：
+The new design removes per-frame rendering from the winit main loop. The winit
+thread still owns window events and platform UI. A dedicated render thread owns
+the render timing loop and consumes script-ready frames.
 
-- `winit::EventLoop` 必须占用主线程，并且平台窗口事件必须由它驱动。
-- `wgpu::Surface`、窗口 resize、present 和平台生命周期需要收敛在 winit 主线程。
-- Ruby/MRI 需要在独立脚本线程中运行 RGSS loop。
+Related boundaries:
 
-因此 mkxp-rs 的兼容目标是：脚本仍然自然调用 `Graphics.update`，但
-`Graphics.update` 不直接渲染。它通知 winit“脚本帧已经准备好”，然后阻塞，
-直到 winit 主线程完成实际渲染。
+- [`WINDOW_CONTROLLER_DESIGN.md`](WINDOW_CONTROLLER_DESIGN.md): window, menu,
+  fullscreen, resize, and `WindowOutput` ownership.
+- [`WINDOW_CONSTRAINTS.md`](WINDOW_CONSTRAINTS.md): window scaling and menu
+  state behavior.
+- [`SCRIPT_HOST_DESIGN.md`](SCRIPT_HOST_DESIGN.md): script host interface and
+  future Ruby engine replacement boundary.
 
-## 当前方案
+## Goals
+
+- Keep RGSS semantics: `Graphics.update` blocks until the prepared frame has
+  been rendered, or returns `false` during shutdown.
+- Keep window ownership on the winit main thread.
+- Stop using `UserEvent/AboutToWait/RedrawRequested` as the only per-frame
+  render driver.
+- Keep resize, fullscreen, menu state, and viewport-scale commands ordered
+  before the next rendered frame.
+- Preserve deterministic shutdown: script thread and render thread must be
+  explicitly signalled and joined before `WindowController` drops.
+- Keep the future Ruby engine behind `ScriptEngine` / `ScriptContext`; replacing
+  the demo script must not require rewriting the frame loop again.
+
+## Non-Goals
+
+- Do not let the script thread present the `wgpu::Surface`.
+- Do not put window/menu/fullscreen policy into `mkxp-graphics`.
+- Do not create a generic service registry.
+- Do not make input-source switching a special game-facing input event.
+- Do not depend on users avoiding macOS CapsLock input-source switching.
+
+## Target Architecture
 
 ```text
-script thread
-  update game state
-  write graphics state
-  Graphics.update / FrameSync::script_frame_ready_and_wait
-    set ready = true
-    send RuntimeEvent::ScriptFrameReady
-    block on Condvar
-  when script engine returns:
-    store ScriptRunResult
-    send RuntimeEvent::ScriptExited
-
 winit main thread
-  EventLoop<RuntimeEvent>::run_app
-  window_event / about_to_wait / user_event
-    apply WindowOutput first
-    if ready && now >= next_frame_at:
-      GraphicsState::update
-      ready = false
-      wake script thread
-      next_frame_at = now + frame_duration
+  owns WindowController
+  receives WindowEvent / menu events
+  converts window effects to RenderCommand
+  handles app exit and joins threads
+
+script thread
+  runs ScriptEngine through ScriptContext
+  mutates script-facing graphics state
+  calls Graphics.update -> FrameSync::script_frame_ready_and_wait
+  blocks until render thread completes the frame
+
+render thread
+  owns frame timing
+  waits for script-ready frame or shutdown
+  drains RenderCommand queue
+  if ready && FPS gate is due:
+    GraphicsState::update()
+    FrameSync::render_finished()
 ```
 
-脚本线程仍然是游戏逻辑的外层循环；winit 主线程仍然是平台事件循环的唯一主体。
-二者在 `Graphics.update` 边界严格交替：
+The important change is that the render thread waits directly on `FrameSync`.
+It is not woken by winit user events and does not need the winit main loop to
+reach `about_to_wait`.
 
-1. 脚本线程推进一帧游戏状态。
-2. 脚本线程在 `Graphics.update` 设置 `ready = true`，发送 winit user event，然后阻塞。
-3. winit 主线程先处理窗口输出和 resize，再在 FPS 门控允许时调用 `GraphicsState::update()`。
-4. winit 主线程完成 present 后设置 `ready = false`，唤醒脚本线程。
-5. 脚本线程从 `Graphics.update` 返回，进入下一帧游戏逻辑。
-
-## 线程和所有权
+## Ownership
 
 ```text
 App / winit main thread
   owns:
     WindowController
     SharedRuntime
-    script JoinHandle
+    ScriptHost JoinHandle
+    RenderHost JoinHandle
+    RenderCommand sender
 
 SharedRuntime
   owns:
     Mutex<GraphicsState>
     FrameSync
-    script_outcome
-    shutdown
+    ScriptOutcomeSlot
+    shutdown flag
 
-WindowController
-  owns:
-    winit::Window
-    menu state
-    window mode / resize policy
-
-GraphicsState
-  owns:
-    wgpu::Surface
-    wgpu::Device
-    wgpu::Queue
-    viewport state
-
-script thread
-  runs a ScriptEngine through ScriptContext
+RenderHost / render thread
   borrows SharedRuntime through Arc
-  writes graphics state
-  blocks at FrameSync
+  owns RenderCommand receiver
+  owns next_frame_at / target frame timing
+
+ScriptHost / script thread
+  borrows SharedRuntime through Arc
+  owns ScriptEngine
 ```
 
-`WindowController` 和 `GraphicsState` 不直接互相持有。`App` 是 glue 层：
+`GraphicsState` can remain inside `SharedRuntime` behind `Mutex<GraphicsState>`
+for the first migration. `FrameSync` still guarantees that script mutation and
+render submission are not concurrent during normal frame flow:
 
-- `WindowController` 输出 `WindowOutput`。
-- `App` 把 `SurfaceResized` 和 `ViewportScaleModeChanged` 应用到 `GraphicsState`。
-- `App` 在渲染前处理窗口输出，保证 resize/fullscreen 状态先进入 graphics。
-- `App` 退出时先设置 `shutdown`，唤醒并 join 脚本线程，再 drop runtime 和 window。
+- Script thread mutates graphics state before `Graphics.update`.
+- Script thread sets `ready = true` and blocks.
+- Render thread drains window commands, renders, sets `ready = false`, and
+  wakes the script.
+- Script thread continues to the next game frame.
 
-`JoinHandle` 的 drop 只会 detach 线程，不会自动停止线程。必须显式 join，避免脚本线程
-在窗口和 surface teardown 期间继续持有或访问 `GraphicsState`。
+The winit thread should stop mutating `GraphicsState` directly. Instead it sends
+commands to the render thread.
+
+## Render Commands
+
+`WindowController` continues to output `WindowOutput`. `App` translates outputs
+into render commands:
+
+```rust
+enum RenderCommand {
+    SurfaceResized { width: u32, height: u32 },
+    ViewportScaleModeChanged(ViewportScaleMode),
+    Shutdown,
+}
+```
+
+Mapping:
+
+```text
+WindowOutput::SurfaceResized
+  -> RenderCommand::SurfaceResized
+
+WindowOutput::ViewportScaleModeChanged
+  -> RenderCommand::ViewportScaleModeChanged
+
+WindowOutput::QuitRequested
+  -> event_loop.exit()
+  -> RenderCommand::Shutdown during App shutdown
+```
+
+The render thread drains all pending commands before rendering a ready frame:
+
+```text
+drain RenderCommand
+apply resize / viewport commands to GraphicsState
+if shutdown:
+  exit render loop
+if frame ready and now >= next_frame_at:
+  render
+```
+
+This preserves the old invariant that resize/fullscreen/viewport changes are
+applied before the next frame is presented, without requiring winit to render.
 
 ## FrameSync
 
-当前同步原语是一个 bool 加一个 `Condvar`：
+`FrameSync` should store both readiness and the time at which the script became
+ready:
 
 ```rust
 struct FrameSync {
-    ready: Mutex<bool>,
+    state: Mutex<FrameSyncState>,
     cv: Condvar,
 }
-```
 
-语义：
-
-- `ready = false`：脚本线程可以继续运行，winit 没有待渲染脚本帧。
-- `ready = true`：脚本线程已经到达 `Graphics.update` 并阻塞，winit 应渲染一帧。
-
-脚本侧：
-
-```rust
-fn script_frame_ready_and_wait(shutdown, wake_event_loop) -> bool {
-    ready = true;
-    wake_event_loop();      // send RuntimeEvent::ScriptFrameReady
-    cv.notify_one();
-
-    while ready && !shutdown {
-        cv.wait();
-    }
-
-    !shutdown
+struct FrameSyncState {
+    ready: bool,
+    ready_at: Option<Instant>,
 }
 ```
 
-winit 侧：
+Required operations:
 
 ```rust
-fn render_if_script_ready() {
-    if script_outcome {
-        handle script exit on main thread;
-        return;
-    }
+impl FrameSync {
+    fn script_frame_ready_and_wait(&self, shutdown: &AtomicBool) -> bool;
+    fn wait_for_ready_or_shutdown(&self, shutdown: &AtomicBool) -> FrameWait;
+    fn render_finished(&self);
+    fn wake_all(&self);
+}
 
-    if !ready || now < next_frame_at {
-        return;
-    }
-
-    graphics.update();
-    ready = false;
-    cv.notify_one();
-    next_frame_at = now + frame_duration;
+enum FrameWait {
+    Ready { ready_at: Instant },
+    Shutdown,
 }
 ```
 
-`Condvar` 负责让脚本线程睡眠和被唤醒。它不能可靠唤醒已经停在
-`ControlFlow::WaitUntil` 的 winit 事件循环，所以脚本侧还必须发送
-`RuntimeEvent::ScriptFrameReady`。这对 macOS 尤其重要：如果只依赖
-`AboutToWait + WaitUntil`，在没有鼠标/窗口事件时可能出现刷新不及时。
+The script side no longer needs to wake winit for normal per-frame rendering.
+`ScriptContext::graphics_update()` should call `script_frame_ready_and_wait()`
+and block until the render thread calls `render_finished()`.
 
-## User Event 和 FPS 门控
+The render side blocks on the same `Condvar`. It wakes when:
 
-`RuntimeEvent::ScriptFrameReady` 的作用只是唤醒 winit，让主线程尽快观察到
-`ready = true`。它不是“立即渲染”的许可。
+- the script sets `ready = true`,
+- shutdown is requested,
+- a command path explicitly calls `wake_all()` because render-side state changed.
 
-实际渲染仍由 `next_frame_at` 控制：
+## Render Timing
+
+The render thread owns `next_frame_at`. It must be a fixed target timeline, not
+"one full frame duration after the previous render finished".
+
+The old timing style:
 
 ```text
-if ready && Instant::now() >= next_frame_at:
-  render
-else:
-  keep waiting until next_frame_at
+render finishes at now
+next_frame_at = now + frame_duration
 ```
 
-这个分层很重要：
+is intentionally not the target design. It adds render time and script update
+time on top of every frame interval, so the visible frame cadence drifts slower
+than `target_fps` whenever either side does real work.
 
-- 没有 user event：winit 在某些平台上可能睡到下一次输入/窗口事件才发现脚本 ready。
-- user event 直接触发渲染：脚本线程会在每次 ready 后立刻被释放，游戏速度可能超过
-  `Graphics.frame_rate` / `target_fps`。
-- user event + `next_frame_at`：winit 能及时醒来，但仍保持稳定帧率。
+The target design advances scheduled frame time by a fixed duration:
 
-`schedule_next_wake()` 用 `ControlFlow::WaitUntil(wake_at)` 安排下一次唤醒。
-如果下一帧时间已经过了，就使用当前 `target_fps` 计算一个新的 wake time，避免忙等。
+```text
+loop:
+  wait until script frame is ready or shutdown
+  if shutdown:
+    break
 
-## Present Mode
+  drain render commands
 
-当前 `mkxp-window` 默认使用：
+  wait until next_frame_at if needed
+  drain render commands again
 
-```rust
-present_mode: wgpu::PresentMode::Fifo
+  graphics.update()
+  frame_sync.render_finished()
+  next_frame_at = advance_frame_deadline(next_frame_at, frame_duration, Instant::now())
 ```
 
-理由：
+The second command drain after the FPS wait matters. Resize/fullscreen commands
+can arrive while the render thread is sleeping until the frame gate opens.
+They must still be applied before present.
 
-- `Fifo` 是跨平台的垂直同步 present mode，行为最接近默认 vsync。
-- macOS 上 `Immediate` 曾让刷新看起来更主动，但在全屏整数缩放后通过系统方式退出全屏时，
-  边缘可能出现 tearing。
-- 帧率稳定性由 `next_frame_at` 管，显示同步由 `Fifo` 管，二者职责不同。
-
-未来接入 `mkxp-config.graphics.vsync` 时，可以把 present mode 变成配置驱动。
-在那之前，默认保持 `Fifo`，优先保证画面稳定和跨平台一致性。
-
-## `Graphics.update` 绑定语义
-
-未来 Ruby 绑定层应把 `Graphics.update` 实现为 `ScriptContext::graphics_update()` 同步点，
-而不是直接调用 renderer：
+Recommended deadline advancement:
 
 ```rust
-fn graphics_update(ctx: &ScriptContext) -> magnus::Value {
-    if !ctx.graphics_update() {
-        // raise/return through the chosen shutdown path
+fn advance_frame_deadline(
+    mut next_frame_at: Instant,
+    frame_duration: Duration,
+    now: Instant,
+) -> Instant {
+    next_frame_at += frame_duration;
+
+    if next_frame_at + frame_duration < now {
+        now + frame_duration
+    } else {
+        next_frame_at
     }
-
-    Qnil.into()
 }
 ```
 
-对 RGSS 脚本的可见语义保持不变：`Graphics.update` 返回时，上一帧画面已经由
-winit 主线程提交。脚本不需要知道内部使用了 winit user event、wgpu present 或 condvar。
+Semantics:
 
-## 输入处理
+- Normal frames target `t`, `t + frame_duration`, `t + 2 * frame_duration`, and
+  so on.
+- Small jitter does not permanently drift the timeline. A frame that renders a
+  few milliseconds late does not force the next frame to wait a whole fresh
+  duration from the late completion time.
+- Large stalls drop timing debt. If the process is hundreds of milliseconds
+  late, do not render a burst of historical frames to catch up; reset the next
+  target near `now + frame_duration`.
+- `Graphics.update` still blocks the script until the scheduled frame is
+  rendered and presented.
 
-输入事件由 winit 主线程捕获。推荐模型：
+`target_fps` remains read from `GraphicsState::target_fps()`. A future config
+service may move this into a separate timing configuration object, but that is
+not required for this migration.
 
-```text
-winit window_event
-  update shared InputState
-
-Ruby Input.update
-  read shared InputState snapshot
-  compute trigger/repeat/release state
-```
-
-这和 mkxp-z 的共享 key state 思路一致。窗口级快捷键由 `WindowController` 消费；
-普通游戏输入应进入未来的 input service，不应混进窗口控制策略。
-
-目前窗口级快捷键只保留：
-
-- `Alt+Enter`：切换全屏。
-
-全屏状态必须以平台真实状态为准。Alt+Enter、菜单项和 macOS 原生全屏/退出全屏都应通过
-同一套 `window_mode` 同步路径更新菜单勾选和 viewport 输出。
-
-## Resize 和窗口输出顺序
-
-窗口事件发生在 winit 主线程。每次 `window_event` 和 `about_to_wait` 都先让
-`WindowController` 处理事件，再把输出应用到 graphics：
+If `target_fps` changes, rebuild the timeline from the current time rather than
+mixing the old duration into the new cadence:
 
 ```text
-WindowEvent::Resized(w, h)
-  -> WindowController
-  -> WindowOutput::SurfaceResized { width: w, height: h }
-  -> GraphicsState::on_resize(w, h)
+frame_duration = 1 / new_target_fps
+next_frame_at = Instant::now() + frame_duration
 ```
 
-如果窗口锁定宽高比，自动修正 resize 是 `WindowController` 内部副作用；
-`SurfaceResized` 仍然输出真实 surface 尺寸，而不是修正目标尺寸。这样即使窗口短暂处于
-off-ratio，wgpu surface 也不会落后于平台真实大小。
+## winit Main Thread Responsibilities
 
-渲染时序：
+The winit thread remains the only owner of platform window and menu objects:
 
 ```text
-winit wake
-  drain/apply WindowOutput
-  render_if_script_ready
-  schedule_next_wake
+ApplicationHandler::resumed
+  create WindowController
+  create wgpu surface from WindowController::window()
+  create GraphicsState
+  create SharedRuntime
+  spawn render thread
+  spawn script thread
+
+ApplicationHandler::window_event
+  WindowController::on_window_event
+  translate WindowOutput -> RenderCommand / exit
+
+ApplicationHandler::about_to_wait
+  WindowController::on_about_to_wait
+  translate WindowOutput -> RenderCommand / exit
+
+ApplicationHandler::user_event
+  handle ScriptExited or future host notifications only
 ```
 
-因此 resize、全屏切换和 viewport mode 变化会在下一次 render 之前进入 graphics。
+The winit thread should not call `GraphicsState::update()` and should not call
+`Window::request_redraw()` for the game frame loop.
 
-## Panic、退出和重置
+It may still call platform APIs required by winit itself, such as fullscreen,
+window resize requests, menu checkmark updates, and event-loop exit.
 
-脚本线程退出结果不应只停在后台线程里。脚本入口返回 `ScriptRunResult`：
+## Script Thread Responsibilities
+
+The script thread shape remains intentionally close to real RGSS:
+
+```text
+loop:
+  update game state
+  mutate graphics state
+  Graphics.update
+    -> ScriptContext::graphics_update()
+    -> block until render thread presents the frame
+```
+
+The `ScriptEngine` trait remains the replacement boundary:
 
 ```rust
-type ScriptRunResult = Result<ScriptExit, ScriptError>;
+trait ScriptEngine: Send + 'static {
+    fn run(self: Box<Self>, ctx: ScriptContext) -> ScriptRunResult;
+}
 ```
 
-线程结束时会把结果写入 `script_outcome`，并发送 `RuntimeEvent::ScriptExited` 唤醒
-winit 主线程。主线程统一消费结果：
+The future Ruby engine should replace `DemoScriptEngine`, not the render host
+or window host.
+
+## Error and Exit Flow
+
+Script thread exits through `ScriptRunResult`:
 
 ```text
 ScriptExit::Finished
-  -> log info
-  -> event_loop.exit()
+  -> record outcome
+  -> send RuntimeEvent::ScriptExited
 
-ScriptExit::ShutdownRequested
-  -> log info
-  -> event_loop.exit()
-
-ScriptError::Message(...)
-  -> convert to WindowError
-  -> log/display error
-  -> event_loop.exit()
+ScriptError::Message / ScriptError::Panic
+  -> record outcome
+  -> send RuntimeEvent::ScriptExited
 ```
 
-脚本线程 panic 也走同一条路径。当前 demo thread 用 `catch_unwind` 捕获 panic：
+The winit thread remains responsible for presenting/logging fatal script errors
+and exiting the app.
+
+Render thread errors should use a separate result slot or command back to the
+winit thread:
+
+```rust
+type RenderRunResult = Result<RenderExit, RenderError>;
+
+enum RuntimeEvent {
+    ScriptExited,
+    RenderExited,
+}
+```
+
+Initial render errors can be fatal:
 
 ```text
-script panic
-  -> record ScriptError::Panic(message)
-  -> shutdown = true
+wgpu::SurfaceError::Lost / unexpected error
+  -> record RenderError
+  -> set shutdown
   -> wake FrameSync
-  -> send ScriptExited
-
-winit next tick
-  -> take script_outcome
-  -> convert to WindowError::ScriptPanic
-  -> log/display panic message
-  -> event_loop.exit()
+  -> send RuntimeEvent::RenderExited
+  -> winit consumes error and exits
 ```
 
-这样主线程会展示脚本错误并走正常程序收尾，而不是让后台线程静默结束。因为
-`ApplicationHandler` 回调不能返回 `Result`，错误会暂存在 `App.fatal_error`；
-`run_app()` 返回后，binary 入口再把它作为 `anyhow::Result` 返回。
+`SurfaceError::Timeout` and `Outdated` may continue to be non-fatal skips.
 
-正常退出：
+## Shutdown Order
+
+Shutdown must be explicit:
 
 ```text
-winit QuitRequested / event loop exiting
-  -> shutdown = true
-  -> FrameSync::wake_all()
-  -> join script thread
-  -> drop SharedRuntime / GraphicsState
-  -> drop WindowController / winit Window
+App::exiting / fatal error / QuitRequested
+  shutdown = true
+  send RenderCommand::Shutdown
+  FrameSync::wake_all()
+  join script thread
+  join render thread
+  drop SharedRuntime / GraphicsState
+  drop WindowController / winit Window
 ```
 
-未来 F12 reset 可以作为独立 control signal：
+`JoinHandle` drop is not enough; it detaches the thread. Both host threads must
+be joined so that no thread can continue using `GraphicsState` or `wgpu::Surface`
+while the window is being destroyed.
+
+`WindowController` must outlive `GraphicsState` because `wgpu::Surface`
+logically depends on the winit window. Keep the current explicit `take()` style
+or ensure field order and shutdown code preserve this invariant.
+
+## macOS Input-Source Switching Rationale
+
+The observed failure mode:
 
 ```text
-winit detects reset shortcut
-  -> reset = true
-  -> wake script if needed
-
-script checks at Graphics.update boundary
-  -> raise Reset
-  -> rgss_main handles reset and restarts script entry
+script thread sets ready = true
+script thread blocks at Graphics.update
+macOS handles rapid input-source switching on main thread
+winit ApplicationHandler is not entered for hundreds/thousands of ms
+script frame waits until main thread returns
 ```
 
-reset 不应绕过 `Graphics.update` 边界直接打断 renderer。
+Attempts that did not solve the issue:
 
-## 与 mkxp-z 的对比
+- Move rendering from `about_to_wait` to `RedrawRequested`.
+- Call `request_redraw()` when the script frame is ready and due.
+- Temporarily use `ControlFlow::Poll` while a script frame is pending.
+- Observe pending ready frames from ordinary `window_event`.
 
-| 项目 | mkxp-z | mkxp-rs |
-|---|---|---|
-| 平台事件循环 | SDL event thread | winit main thread |
-| 脚本线程 | RGSS thread | Ruby/demo script thread |
-| `Graphics.update` | 同步并触发渲染 | 设置 ready、发送 user event、阻塞 |
-| 渲染线程 | OpenGL context 可切换 | winit main thread owns wgpu render/present |
-| 唤醒机制 | SDL/user messages + sync points | `EventLoopProxy` + `Condvar` |
-| 帧率控制 | Graphics frame rate | `next_frame_at` + `target_fps` |
-| 显示同步 | OpenGL/driver vsync | `wgpu::PresentMode::Fifo` |
-| 窗口 resize | SDL event thread | `WindowController` -> `WindowOutput` -> `GraphicsState` |
+These attempts failed because all of them still require the winit main thread
+to reach an `ApplicationHandler` callback.
 
-## 当前实现状态
+The render thread design removes that dependency. It uses the script/render
+`Condvar`, not the AppKit runloop, as the per-frame wake mechanism.
 
-当前落地位置：
+## Technical Assumptions to Verify
 
-- `crates/mkxp-window/src/main.rs`
-  - `RuntimeEvent::ScriptFrameReady`
-  - `FrameSync`
-  - `SharedRuntime`
-  - `App::render_if_script_ready`
-  - `App::schedule_next_wake`
-- `crates/mkxp-window/src/script_host.rs`
-  - `ScriptEngine`
-  - `ScriptContext`
-  - `DemoScriptEngine`
-  - `spawn_script_thread`
-- `crates/mkxp-window/src/window_control.rs`
-  - `WindowController`
-  - `WindowOutput`
-  - `window_mode` 同步和窗口级命令处理
-- `crates/mkxp-graphics/src/`
-  - `GraphicsState::update`
-  - viewport scale modes
-  - resize/surface reconfigure
+The migration depends on these assumptions:
 
-当前 demo 线程不是最终脚本引擎，但它刻意模拟真实 RGSS 运行形状：
+1. `wgpu::Device`, `wgpu::Queue`, and `wgpu::Surface<'static>` can be moved to
+   and used from the render thread while the winit `Window` remains alive on the
+   main thread.
+2. Presenting a `wgpu::Surface` from a non-main thread works on the supported
+   backends, especially macOS/Metal.
+3. Resize reconfiguration can safely happen on the render thread after the main
+   thread sends the latest physical size.
 
-```text
-mutate graphics state
-Graphics.update boundary
-block until render
-continue next script frame
+These should be verified with a small implementation and macOS smoke test before
+removing the old diagnostics.
+
+If assumption 2 fails on macOS, the fallback is a platform-specific design:
+
+- keep present on the main thread only for platforms that require it,
+- or introduce a lower-level macOS display/link integration,
+- or accept that macOS input-source switching can stall rendering when using
+  winit/AppKit main-thread present.
+
+Do not silently fall back to the old design without documenting the platform
+constraint.
+
+## Implementation Plan
+
+### Task 1: Remove Failed Callback Workarounds
+
+Files:
+
+- Modify `crates/mkxp-window/src/main.rs`
+- Modify this document if the observed behavior changes during testing
+
+Steps:
+
+1. Remove the ordinary `window_event` path that calls
+   `request_redraw_if_script_ready()` for non-redraw events.
+2. Keep `FrameSync.ready_at` and diagnostics until the render thread is proven.
+3. Keep `request_redraw` code only until render-thread migration replaces the
+   old path.
+4. Run `cargo test -p mkxp-window`.
+
+### Task 2: Introduce Render Host
+
+Files:
+
+- Create `crates/mkxp-window/src/render_host.rs`
+- Modify `crates/mkxp-window/src/main.rs`
+
+Initial types:
+
+```rust
+enum RenderCommand {
+    SurfaceResized { width: u32, height: u32 },
+    ViewportScaleModeChanged(ViewportScaleMode),
+    Shutdown,
+}
+
+trait RenderHost {
+    fn spawn(runtime: Arc<SharedRuntime>, commands: Receiver<RenderCommand>) -> JoinHandle<()>;
+}
 ```
 
-因此后续接入 magnus 时，应优先替换 `DemoScriptEngine` 构造和 binding 层，而不是重写
-winit/graphics 的帧循环。
+The first implementation can be a free function, mirroring
+`spawn_script_thread()`.
 
-## 测试策略
+### Task 3: Move Frame Rendering to Render Thread
 
-已覆盖的关键行为：
+Files:
 
-- `FrameSync` 会阻塞脚本线程直到 render finished。
-- `shutdown` 会释放阻塞中的脚本线程。
-- 脚本正常结束、脚本错误和 panic payload 会被记录成 `ScriptRunResult` 并只消费一次。
-- `WindowController` 覆盖 resize tracker、窗口模式同步、全屏进入/退出和菜单勾选状态。
-- `mkxp-graphics` 覆盖 fixed game coordinate 和 viewport scale mode 计算。
+- Modify `crates/mkxp-window/src/main.rs`
+- Modify `crates/mkxp-window/src/render_host.rs`
 
-后续接入真实 Ruby 后应补充：
+Steps:
 
-- `Graphics.update` 绑定在 render 完成前不会返回。
-- Ruby exception 能转成 `ScriptError::Message` 并进入主线程统一展示/退出路径。
-- reset signal 在 `Graphics.update` 边界抛出，并不会破坏 graphics/window 状态。
-- 无输入、鼠标不动、窗口不动时，脚本 ready 仍能通过 user event 驱动稳定渲染。
-- 不同平台上默认 `Fifo` present mode 的窗口/全屏切换行为一致。
+1. Move `next_frame_at`, `frame_duration`, and render timing into render host.
+2. Render host waits on `FrameSync::wait_for_ready_or_shutdown()`.
+3. Render host drains `RenderCommand` before each frame.
+4. Render host calls `GraphicsState::update()`.
+5. Render host calls `FrameSync::render_finished()`.
+6. Remove per-frame `request_redraw()` and `render_if_script_ready()` from
+   `ApplicationHandler`.
 
-## 非目标和暂缓项
+### Task 4: Route Window Outputs to Render Commands
 
-当前设计不做这些事：
+Files:
 
-- 不让脚本线程直接持有或 present `wgpu::Surface`。
-- 不在 `WindowController` 中创建或持有 `GraphicsState`。
-- 不把普通游戏输入解释为窗口命令。
-- 不引入通用 runtime service registry。
-- 不启用场景图双缓冲。
+- Modify `crates/mkxp-window/src/main.rs`
+- Modify `crates/mkxp-window/src/render_host.rs`
 
-双缓冲可以作为未来性能优化：
+Steps:
 
-```text
-script writes back scene
-winit renders front scene
-Graphics.update swaps front/back
-```
+1. `SurfaceResized` sends `RenderCommand::SurfaceResized`.
+2. `ViewportScaleModeChanged` sends `RenderCommand::ViewportScaleModeChanged`.
+3. `QuitRequested` exits winit and triggers shutdown.
+4. If the render command receiver is closed, record a fatal render host error.
 
-代价是一帧显示延迟和更复杂的资源生命周期。RPG Maker 典型场景下，当前严格交替模型更简单，
-也更接近 `Graphics.update` 作为同步点的脚本语义。
+### Task 5: Error Propagation
+
+Files:
+
+- Modify `crates/mkxp-window/src/main.rs`
+- Modify `crates/mkxp-window/src/render_host.rs`
+
+Steps:
+
+1. Add `RuntimeEvent::RenderExited`.
+2. Add a render outcome slot mirroring `ScriptOutcomeSlot`, or make a generic
+   once-consumed outcome slot.
+3. Convert render fatal errors into `WindowError`.
+4. On render fatal error, set shutdown, wake script, exit event loop, and join
+   both threads.
+
+### Task 6: Documentation and Tests
+
+Files:
+
+- Modify `docs/FRAME_LOOP_DESIGN.md`
+- Modify `docs/SCRIPT_HOST_DESIGN.md` if `ScriptContext::graphics_update()`
+  stops sending winit user events.
+- Modify `docs/WINDOW_CONTROLLER_DESIGN.md` if `App` no longer applies
+  `WindowOutput` directly to `GraphicsState`.
+- Modify tests in `crates/mkxp-window/src/main.rs` and new render host tests.
+
+Required test coverage:
+
+- `FrameSync` wakes render host when script frame becomes ready.
+- `FrameSync` shutdown releases a blocked script frame.
+- render host applies resize commands before rendering a ready frame.
+- render host releases the script thread after render.
+- render host exits on shutdown without leaving script blocked.
+- render fatal error is recorded once and reaches the winit-owned error path.
+
+## Current Implementation Status
+
+As of this design rewrite, the code still uses the old winit-main-thread render
+path with diagnostics:
+
+- `RuntimeEvent::ScriptFrameReady`
+- `App::request_redraw_if_script_ready`
+- `WindowEvent::RedrawRequested -> App::render_if_script_ready`
+- `FrameDiagnostics`
+
+These are transitional and should be removed or simplified once render host is
+implemented.
+
+`ScriptHost` is already close to the desired boundary. The main expected change
+is that `ScriptContext::graphics_update()` should no longer need to send a winit
+user event for normal per-frame rendering. It may still send events for script
+exit, fatal errors, or explicit host notifications.
+
+## Verification Strategy
+
+Before considering the migration complete:
+
+- Run `cargo test -p mkxp-window`.
+- Run `cargo check -p mkxp-window`.
+- Run `cargo clippy -p mkxp-window --no-deps -- -D warnings`.
+- Run `git diff --check`.
+- On macOS, rapidly switch input sources with CapsLock or the configured input
+  shortcut for at least 30 seconds.
+- Confirm no recurring `script frame was ready before the main loop observed it`
+  warnings during render-thread mode.
+- Confirm fullscreen enter/exit, integer fullscreen scaling, and window resize
+  still update viewport and menu state correctly.
+
+The macOS smoke test is required because this redesign exists to remove a
+platform/runloop timing dependency that unit tests cannot reproduce.

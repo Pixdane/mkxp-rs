@@ -10,8 +10,11 @@ Do not create a standalone `mkxp-scripts` crate yet.
 
 Keep the script host abstraction inside `mkxp-window`, in
 `crates/mkxp-window/src/script_host.rs`. The current window binary still owns
-winit, `EventLoopProxy`, `FrameSync`, `GraphicsState`, and shutdown ordering,
-so an internal module is the honest boundary.
+winit, `FrameSync`, `GraphicsState`, and shutdown ordering, so an internal
+module is the honest boundary. The frame-loop redesign in
+[`FRAME_LOOP_DESIGN.md`](FRAME_LOOP_DESIGN.md) moves normal per-frame rendering
+to a render host thread; script host should still expose the same script-facing
+boundary.
 
 `mkxp-scripts` is also an imprecise name: it could mean script files,
 `Scripts.rxdata` loading, RGSS bytecode, or scripting runtime. When the boundary
@@ -23,7 +26,8 @@ is stable, the more likely crates are:
 ## Non-goals
 
 - Do not expose `Arc<SharedRuntime>` to script engines as the public interface.
-- Do not expose `EventLoopProxy<RuntimeEvent>` or `RuntimeEvent` to script engines.
+- Do not expose `EventLoopProxy<RuntimeEvent>`, render host internals, or
+  `RuntimeEvent` to script engines.
 - Do not introduce a generic service registry, `Any`, or `Arc<Mutex<dyn Service>>`.
 - Do not guess audio, filesystem, or input APIs before their real bindings need them.
 
@@ -59,8 +63,8 @@ spawn_script_thread(Box::new(RubyScriptEngine::new(...)), runtime, proxy);
 ## ScriptContext
 
 `ScriptContext` is the script-facing facade. Internally it may hold
-`Arc<SharedRuntime>` and `EventLoopProxy<RuntimeEvent>`, but those fields should
-stay private.
+`Arc<SharedRuntime>` and host notification handles, but those fields should stay
+private.
 
 Initial methods:
 
@@ -73,9 +77,15 @@ impl ScriptContext {
 ```
 
 `graphics_update()` is the important boundary: it sets the frame-ready flag,
-sends `RuntimeEvent::ScriptFrameReady`, blocks on `FrameSync`, and returns
-`false` when shutdown was requested. A real Ruby `Graphics.update` binding
-should call this method rather than directly touching `FrameSync` or winit.
+blocks on `FrameSync`, and returns `false` when shutdown was requested. A real
+Ruby `Graphics.update` binding should call this method rather than directly
+touching `FrameSync`, render host internals, or winit.
+
+In the old winit-main-thread render loop, `graphics_update()` also sent
+`RuntimeEvent::ScriptFrameReady` so the main thread would wake and render. In the
+render-host design, normal per-frame wakeup is the `FrameSync` condvar consumed
+by the render thread. Winit user events should remain for script exit, fatal
+errors, and explicit host notifications, not for every rendered frame.
 
 ## Future service growth
 
@@ -118,15 +128,14 @@ host-owned path.
 Implemented in `crates/mkxp-window/src/script_host.rs`:
 
 - `ScriptEngine` owns the script entry point.
-- `ScriptContext` hides `Arc<SharedRuntime>` and
-  `EventLoopProxy<RuntimeEvent>`.
+- `ScriptContext` hides `Arc<SharedRuntime>` and any host notification handles.
 - `DemoScriptEngine` contains the old demo loop and calls
   `ctx.with_graphics(...)` plus `ctx.graphics_update()`.
 - `spawn_script_thread` owns thread spawn, panic capture, result recording, and
   the final `RuntimeEvent::ScriptExited` wakeup.
 
 `App` still owns winit, graphics bootstrap, `SharedRuntime`, `WindowController`,
-and shutdown/drop ordering. It only chooses which engine to spawn:
+and shutdown/drop ordering. Today it chooses which engine to spawn:
 
 ```rust
 spawn_script_thread(Box::new(DemoScriptEngine), runtime, proxy);
@@ -142,4 +151,4 @@ spawn_script_thread(Box::new(DemoScriptEngine), runtime, proxy);
    `mkxp-runtime` or a similarly named crate.
 
 The goal is that replacing the demo with the real script engine changes engine
-construction, not the winit frame loop.
+construction, not the frame synchronization or render host architecture.

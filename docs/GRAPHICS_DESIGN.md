@@ -128,20 +128,24 @@ impl GameWindow {
 ### 与渲染层的关系
 
 ```
-事件循环 (winit event loop)
+winit main thread
   │
-  ├── Resized 事件 → graphics.on_resize(width, height)
-  ├── RuntimeEvent::ScriptFrameReady / AboutToWait
-  │      → if script ready && FPS gate open:
-  │          graphics.update() → 画一帧
+  ├── Resized 事件 → RenderCommand::SurfaceResized
+  ├── 全屏/viewport 菜单 → RenderCommand::ViewportScaleModeChanged
+  └─→ GameWindow / WindowController (管理 winit 窗口，不碰 GPU)
+
+render thread
   │
-  ├─→ GameWindow (管理 winit 窗口，不碰 GPU)
+  ├── drain RenderCommand
+  ├── if script frame ready && FPS gate open:
+  │      graphics.update() → 画一帧
   └─→ GraphicsState (持有 surface、device、场景图)
 ```
 
 窗口层只做两件事：管理 winit 窗口本身 + 为渲染层提供 surface。
 渲染层从 `create_surface()` 拿到 surface 后，自己负责 device、queue、
-surface 配置和 swapchain 管理。窗口尺寸变化时，外部事件循环调用
+surface 配置和 swapchain 管理。窗口尺寸变化时，winit 主线程发送
+`RenderCommand::SurfaceResized`；render thread 在下一帧前调用
 `GraphicsState::on_resize()`，渲染层更新内部状态。
 
 ### 为什么分开
@@ -1096,9 +1100,9 @@ GraphicsState 公开方法
 ├─ 查询（Ruby 用）
 │   get_sprite_x/y/z/zoom/ ...
 │
-└─ 渲染和窗口（winit 用）
-    update()        ← AboutToWait 时画一帧
-    on_resize()     ← 窗口缩放时重新配置 surface
+└─ 渲染和窗口（render host 用）
+    update()        ← render thread 在 FrameSync ready 且 FPS gate 到期时画一帧
+    on_resize()     ← render thread 收到 RenderCommand::SurfaceResized 后重新配置 surface
 ```
 
 Ruby 绑定层只是把 Ruby 参数翻译成 Rust 类型，调用 `GraphicsState` 的方法。
@@ -1115,26 +1119,27 @@ fn sprite_set_x(ruby: &Ruby, shared: &Shared, id: NodeId, x: i32) {
 ### 怎么共享
 
 ```rust
-/// 两个线程共享的所有状态。
-/// 启动时创建，Arc 克隆给 winit 和 Ruby 双方。
+/// 多线程共享的 runtime 状态。
+/// 启动时创建，Arc 克隆给 render host 和 Ruby/script 双方。
 struct Shared {
     graphics: Mutex<GraphicsState>,
     input: InputState,           // 内部全是 Atomic*，无需锁
     signals: ControlSignals,     // 内部 AtomicBool
-    frame_sync: FrameSync,       // 内部 Mutex<bool> + Condvar
+    frame_sync: FrameSync,       // 内部 Mutex<FrameSyncState> + Condvar
     config: Config,              // 只读
 }
 
 // ── 启动 ──
 let shared = Arc::new(Shared { ... });
 
-// winit 线程拿一份
+// render 线程拿一份
 let s = shared.clone();
-event_loop.run(move |event, _| {
-    Event::AboutToWait => {
-        s.frame_sync.wait_until_ruby_ready();
+thread::spawn(move || {
+    loop {
+        s.frame_sync.wait_for_ready_or_shutdown();
+        drain_render_commands();
         s.graphics.lock().unwrap().update();
-        s.frame_sync.signal_ruby();
+        s.frame_sync.render_finished();
     }
 });
 
@@ -1150,10 +1155,10 @@ thread::spawn(move || {
 
 ### 为什么 Mutex 是零竞争的
 
-FrameSync 保证了 winit 和 Ruby 永远不会同时调用 `graphics.lock()`。
-winit 拿锁时 Ruby 正阻塞在 `frame_sync` 上，Ruby 拿锁时 winit
-正在处理窗口事件。Mutex 只是为了让 Rust 类型系统接受跨线程可变性，
-实际运行中锁从不等待。
+FrameSync 保证了 render thread 和 Ruby/script thread 永远不会同时调用
+`graphics.lock()`。render thread 拿锁时 Ruby 正阻塞在 `frame_sync` 上；
+Ruby 拿锁时 render thread 正在等待下一次 ready 或 FPS gate。Mutex 主要用于让
+Rust 类型系统接受跨线程可变性，正常帧循环中不应长期竞争。
 
 ### 依赖方向
 
@@ -1219,7 +1224,7 @@ binary crate 做的事情 `mkxp-graphics` 一概不知：
 - 选择 GPU 后端（Vulkan/Metal/DX12）
 - 协调音频、输入、文件系统
 - 脚本线程和 `Graphics.update` 的 `FrameSync` 调度
-- `RuntimeEvent::ScriptFrameReady`、`ControlFlow::WaitUntil` 和 present mode 选择
+- render host、FPS gate、render command queue 和 present mode 选择
 
 ---
 
@@ -1328,11 +1333,11 @@ Ruby 对象持有 `Arc<SpriteData>`，SceneGraph 持有 `Weak<SpriteData>`。
 
 帧率控制：
 
-当前 `mkxp-window` 使用 `RuntimeEvent::ScriptFrameReady` 唤醒 winit，再用
-`next_frame_at` + `ControlFlow::WaitUntil` 执行 `target_fps` 门控。present mode
-默认使用 `wgpu::PresentMode::Fifo`，由显示同步避免 tearing；脚本线程不会因为
-user event 提前到达而越过 FPS 门控。完整帧循环见
-[`FRAME_LOOP_DESIGN.md`](FRAME_LOOP_DESIGN.md)。
+目标 frame-loop 使用 render host thread 等待 `FrameSync`，再用固定时间轴
+`next_frame_at += frame_duration` 执行 `target_fps` 门控；严重落后时丢弃历史 timing
+debt，避免补帧风暴。present mode 默认使用 `wgpu::PresentMode::Fifo`，由显示同步避免
+tearing；脚本线程不会因为 winit main thread 被 macOS 输入法切换阻塞而长期卡在
+`Graphics.update`。完整帧循环见 [`FRAME_LOOP_DESIGN.md`](FRAME_LOOP_DESIGN.md)。
 
 ---
 
