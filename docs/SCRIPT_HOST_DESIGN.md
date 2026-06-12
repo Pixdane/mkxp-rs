@@ -143,11 +143,13 @@ Implemented in `crates/mkxp-window/src/script_host.rs`:
 type at startup:
 
 ```rust
-let mut app = App::<DemoScriptEngine>::new(proxy);
+let mut app = App::<DemoScriptEngine>::new(proxy, runtime_config);
 ```
 
 Each script launch uses `E::default()`, so restart can create a fresh engine
-instance without changing the window/render host.
+instance without changing the window/render host. `ScriptContext::config()`
+exposes the same runtime config to script engines without requiring engine
+construction arguments.
 
 ## Remaining migration work
 

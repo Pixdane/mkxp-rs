@@ -55,9 +55,9 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `vsync` | `bool` | `false` | Wait for the display vertical blank before swapping buffers to prevent screen tearing. |
+| `vsync` | `bool` | `true` | Wait for the display vertical blank before swapping buffers to prevent screen tearing. |
 | `sync_to_refresh_rate` | `bool` | `false` | Match frame timing to the display refresh rate, and report the true frame rate back to Ruby scripts. Force-disabled if the refresh rate cannot be determined. |
-| `frame_rate` | `u32` | `0` | Cap the frame rate to this value. `0` means no cap. |
+| `frame_rate` | `u32` | `60` | Cap the frame rate to this value. The runtime clamps configured values to `1..=240`. |
 | `scale_mode` | ScaleMode | `"bilinear"` | Default scaling algorithm for screen upscale, downscale, and bitmap scaling. One of `"nearest"` `"bilinear"` `"bicubic"` `"lanczos3"` `"xbrz"`. |
 | `scale_up` | `Option<ScaleMode>` | `None` | Override the screen upscale algorithm. `None` inherits from `scale_mode`. |
 | `scale_down` | `Option<ScaleMode>` | `None` | Override the screen downscale algorithm. |

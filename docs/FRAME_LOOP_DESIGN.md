@@ -600,10 +600,12 @@ Required test coverage:
 
 The render-host migration is implemented in `mkxp-window`:
 
-- `main.rs` is the current binary entry: it initializes logging, creates the
-  winit event loop, selects `App::<DemoScriptEngine>`, and runs `run_app()`.
-- `app.rs` owns winit `ApplicationHandler`, wgpu bootstrap, event forwarding,
-  shutdown, and thread joins.
+- `main.rs` is the current binary entry: it loads `mkxp-config`, initializes
+  logging from that config, creates the winit event loop, selects
+  `App::<DemoScriptEngine>`, and runs `run_app()`.
+- `app.rs` owns winit `ApplicationHandler`, wgpu bootstrap, runtime config
+  consumption, event forwarding, shutdown, and thread joins. Runtime config now
+  drives window title/size, target FPS, vsync present mode, and reset enablement.
 - `render_host.rs` owns `RenderCommand`, render-thread spawn, render timing,
   command draining, `GraphicsState::update()`, and render error propagation.
 - `frame_sync.rs` owns the script/render synchronization primitive; the render

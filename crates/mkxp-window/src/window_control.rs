@@ -46,21 +46,21 @@ const RESIZE_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
 pub(crate) struct WindowConfig {
     /// Window title.
     pub title: String,
-    /// Game logical width in pixels.
-    pub game_width: u32,
-    /// Game logical height in pixels.
-    pub game_height: u32,
+    /// Initial window inner size in physical pixels.
+    pub inner_size: (u32, u32),
     /// Whether the window is resizable by the user.
     pub resizable: bool,
+    /// Whether restart/reset commands are enabled.
+    pub enable_reset: bool,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
             title: "mkxp-rs".into(),
-            game_width: GAME_W,
-            game_height: GAME_H,
+            inner_size: (GAME_W, GAME_H),
             resizable: true,
+            enable_reset: true,
         }
     }
 }
@@ -390,6 +390,7 @@ pub(crate) struct WindowController {
     fullscreen_scale_mode: FullscreenScaleMode,
     resize_requests: ResizeRequestTracker,
     modifiers: ModifiersState,
+    enable_reset: bool,
 }
 
 impl WindowController {
@@ -401,19 +402,19 @@ impl WindowController {
         event_loop: &ActiveEventLoop,
         config: WindowConfig,
     ) -> Result<Self, WindowControllerError> {
-        let game_size = PhysicalSize::new(config.game_width, config.game_height);
+        let initial_size = PhysicalSize::new(config.inner_size.0, config.inner_size.1);
 
         let window = event_loop
             .create_window(
                 WindowAttributes::default()
                     .with_title(&config.title)
                     .with_resizable(config.resizable)
-                    .with_inner_size(game_size),
+                    .with_inner_size(initial_size),
             )
             .map_err(WindowControllerError::Window)?;
 
         let (menu, receiver, menu_items) =
-            Self::build_menu().map_err(WindowControllerError::Menu)?;
+            Self::build_menu(config.enable_reset).map_err(WindowControllerError::Menu)?;
 
         Ok(Self {
             window,
@@ -425,6 +426,7 @@ impl WindowController {
             fullscreen_scale_mode: FullscreenScaleMode::Fit,
             resize_requests: ResizeRequestTracker::default(),
             modifiers: ModifiersState::default(),
+            enable_reset: config.enable_reset,
         })
     }
 
@@ -473,7 +475,7 @@ impl WindowController {
                 "scale_3x" => outputs.extend(self.handle_menu_integer_scale(3)),
                 "scale_4x" => outputs.extend(self.handle_menu_integer_scale(4)),
                 "lock_aspect" => outputs.extend(self.handle_menu_lock_aspect()),
-                "restart" => outputs.push(WindowOutput::RestartRequested),
+                "restart" if self.enable_reset => outputs.push(WindowOutput::RestartRequested),
                 "quit" => outputs.push(WindowOutput::QuitRequested),
                 _ => {}
             }
@@ -508,8 +510,9 @@ impl WindowController {
 
 impl WindowController {
     /// Build the platform menu structure.
-    fn build_menu() -> Result<(Menu, crossbeam_channel::Receiver<MenuEvent>, MenuItems), muda::Error>
-    {
+    fn build_menu(
+        enable_reset: bool,
+    ) -> Result<(Menu, crossbeam_channel::Receiver<MenuEvent>, MenuItems), muda::Error> {
         let menu = Menu::new();
 
         let fit = CheckMenuItem::with_id("fit", "Fit", true, false, None);
@@ -519,7 +522,7 @@ impl WindowController {
         let scale_4x = CheckMenuItem::with_id("scale_4x", "4x (2560\u{d7}1920)", true, false, None);
         let lock_aspect =
             CheckMenuItem::with_id("lock_aspect", "Lock Aspect Ratio", true, false, None);
-        let restart = MenuItem::with_id("restart", "Restart", true, None);
+        let restart = MenuItem::with_id("restart", "Restart", enable_reset, None);
 
         let view_menu = Submenu::new("View", true);
         view_menu.append_items(&[&fit, &scale_1x, &scale_2x, &scale_3x, &scale_4x])?;
@@ -618,7 +621,7 @@ impl WindowController {
         if self.modifiers.alt_key() && key == KeyCode::Enter {
             return self.toggle_fullscreen();
         }
-        if key_requests_restart(key) {
+        if self.enable_reset && key_requests_restart(key) {
             return vec![WindowOutput::RestartRequested];
         }
 

@@ -55,9 +55,9 @@ MKXP_* 环境变量              最高优先级
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `vsync` | `bool` | `false` | 是否等待显示器垂直同步信号后再交换缓冲区，以消除画面撕裂。 |
+| `vsync` | `bool` | `true` | 是否等待显示器垂直同步信号后再交换缓冲区，以消除画面撕裂。 |
 | `sync_to_refresh_rate` | `bool` | `false` | 是否将帧时序同步到显示器刷新率，并将真实帧率报告回 Ruby 脚本。如果无法检测刷新率则强制禁用。 |
-| `frame_rate` | `u32` | `0` | 帧率上限。`0` 表示不限制。 |
+| `frame_rate` | `u32` | `60` | 帧率上限。运行时会将配置值限制在 `1..=240`。 |
 | `scale_mode` | ScaleMode | `"bilinear"` | 默认缩放算法，作用于画面放大、缩小和位图缩放。可选 `"nearest"` `"bilinear"` `"bicubic"` `"lanczos3"` `"xbrz"`。 |
 | `scale_up` | `Option<ScaleMode>` | `None` | 覆写画面放大算法。`None` 表示跟随 `scale_mode`。 |
 | `scale_down` | `Option<ScaleMode>` | `None` | 覆写画面缩小算法。 |

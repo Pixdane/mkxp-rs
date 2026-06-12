@@ -153,21 +153,6 @@ pub(crate) struct SharedRuntime {
 }
 
 impl SharedRuntime {
-    pub(crate) fn new(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        surface: wgpu::Surface<'static>,
-        surface_config: wgpu::SurfaceConfiguration,
-    ) -> Self {
-        Self::with_config(
-            device,
-            queue,
-            surface,
-            surface_config,
-            RuntimeConfig::default(),
-        )
-    }
-
     pub(crate) fn with_config(
         device: wgpu::Device,
         queue: wgpu::Queue,

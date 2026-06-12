@@ -12,15 +12,16 @@ use tracing::{error, info};
 
 use crate::error::{ScriptExit, WindowError};
 use crate::render_host::{RenderCommand, RenderError, spawn_render_thread};
-use crate::runtime::{RuntimeEvent, SharedRuntime};
+use crate::runtime::{RuntimeConfig, RuntimeEvent, SharedRuntime};
 use crate::script_host::{ScriptEngine, spawn_script_thread};
-use crate::window_control::{GAME_H, GAME_W, WindowConfig, WindowController, WindowOutput};
+use crate::window_control::{WindowConfig, WindowController, WindowOutput};
 
 // ── App ──
 
 pub(crate) struct App<E: ScriptEngine> {
     _engine: PhantomData<E>,
     event_loop_proxy: EventLoopProxy<RuntimeEvent>,
+    config: RuntimeConfig,
     runtime: Option<Arc<SharedRuntime>>,
     script_thread: Option<JoinHandle<()>>,
     render_thread: Option<JoinHandle<()>>,
@@ -30,10 +31,14 @@ pub(crate) struct App<E: ScriptEngine> {
 }
 
 impl<E: ScriptEngine> App<E> {
-    pub(crate) fn new(event_loop_proxy: EventLoopProxy<RuntimeEvent>) -> Self {
+    pub(crate) fn new(
+        event_loop_proxy: EventLoopProxy<RuntimeEvent>,
+        config: RuntimeConfig,
+    ) -> Self {
         Self {
             _engine: PhantomData,
             event_loop_proxy,
+            config,
             runtime: None,
             script_thread: None,
             render_thread: None,
@@ -98,7 +103,15 @@ impl<E: ScriptEngine> App<E> {
             return Ok(());
         }
 
-        let window = WindowController::new(event_loop, WindowConfig::default())?;
+        let window = WindowController::new(
+            event_loop,
+            WindowConfig {
+                title: self.config.window_title.clone(),
+                inner_size: self.config.window_size,
+                enable_reset: self.config.enable_reset,
+                ..Default::default()
+            },
+        )?;
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -122,25 +135,33 @@ impl<E: ScriptEngine> App<E> {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))?;
 
-        let surface_format = surface
-            .get_capabilities(&adapter)
+        let surface_capabilities = surface.get_capabilities(&adapter);
+        let surface_format = surface_capabilities
             .formats
             .first()
             .copied()
             .ok_or_else(|| MkxpError::Init("surface reported no supported formats".into()))?;
+        let present_mode = select_present_mode(self.config.vsync, &surface_capabilities);
+        let size = window.window().inner_size();
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: GAME_W,
-            height: GAME_H,
-            present_mode: wgpu::PresentMode::Fifo,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
 
-        let runtime = Arc::new(SharedRuntime::new(device, queue, surface, surface_config));
+        let runtime = Arc::new(SharedRuntime::with_config(
+            device,
+            queue,
+            surface,
+            surface_config,
+            self.config.clone(),
+        ));
 
         // Create render command channel.
         let (render_tx, render_rx) = mpsc::channel();
@@ -160,6 +181,18 @@ impl<E: ScriptEngine> App<E> {
         self.window = Some(window);
 
         Ok(())
+    }
+}
+
+fn select_present_mode(vsync: bool, capabilities: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
+    if !vsync
+        && capabilities
+            .present_modes
+            .contains(&wgpu::PresentMode::Immediate)
+    {
+        wgpu::PresentMode::Immediate
+    } else {
+        wgpu::PresentMode::Fifo
     }
 }
 
@@ -322,5 +355,51 @@ impl<E: ScriptEngine> App<E> {
 impl<E: ScriptEngine> Drop for App<E> {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capabilities(present_modes: Vec<wgpu::PresentMode>) -> wgpu::SurfaceCapabilities {
+        wgpu::SurfaceCapabilities {
+            formats: vec![wgpu::TextureFormat::Bgra8UnormSrgb],
+            present_modes,
+            alpha_modes: vec![wgpu::CompositeAlphaMode::Auto],
+            usages: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        }
+    }
+
+    #[test]
+    fn present_mode_uses_fifo_when_vsync_is_enabled() {
+        let capabilities =
+            capabilities(vec![wgpu::PresentMode::Immediate, wgpu::PresentMode::Fifo]);
+
+        assert_eq!(
+            select_present_mode(true, &capabilities),
+            wgpu::PresentMode::Fifo
+        );
+    }
+
+    #[test]
+    fn present_mode_uses_immediate_when_vsync_is_disabled_and_supported() {
+        let capabilities =
+            capabilities(vec![wgpu::PresentMode::Immediate, wgpu::PresentMode::Fifo]);
+
+        assert_eq!(
+            select_present_mode(false, &capabilities),
+            wgpu::PresentMode::Immediate
+        );
+    }
+
+    #[test]
+    fn present_mode_falls_back_to_fifo_without_immediate_support() {
+        let capabilities = capabilities(vec![wgpu::PresentMode::Fifo]);
+
+        assert_eq!(
+            select_present_mode(false, &capabilities),
+            wgpu::PresentMode::Fifo
+        );
     }
 }
