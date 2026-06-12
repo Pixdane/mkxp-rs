@@ -30,23 +30,21 @@
         resizable: true,
         # Preserve the game screen's aspect ratio on resize (letterboxing)
         fixed_aspect_ratio: true,
-        # Enable integer-ratio upscaling (recommended for pixel-art games)
+        # Parsed for compatibility; runtime integer-scale commands are in the View menu.
         integer_scaling: false,
-        # Skip drawing a frame when running behind schedule
+        # Parsed for compatibility; frame skipping is not wired into the render host yet.
         frame_skip: false,
     ),
 
     graphics: (
         # Vertical synchronisation (prevents screen tearing)
         vsync: true,
-        # Sync frame timing to the display refresh rate.
-        # Unlike vsync, this also reports the true frame rate back to Ruby scripts
-        # so timers stay accurate. Disabled if the refresh rate cannot be detected.
+        # Parsed for compatibility; refresh-rate timing is not wired into the render host yet.
         sync_to_refresh_rate: false,
         # Frame rate cap. 0 disables the render-host FPS gate.
         frame_rate: 60,
         # Logical resolution (Graphics.width / Graphics.height).
-        # (0, 0) uses the RGSS-version default (XP: 640x480, VX/Ace: 544x416).
+        # Non-positive values fall back to the reference default.
         game_size: (640, 480),
 
         # ---- Scaling ----

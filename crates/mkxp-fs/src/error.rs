@@ -55,13 +55,17 @@ mod tests {
 
     #[test]
     fn not_found_display() {
-        let e = FsError::NotFound { path: "Graphics/Title.png".into() };
+        let e = FsError::NotFound {
+            path: "Graphics/Title.png".into(),
+        };
         assert_eq!(e.to_string(), "file not found: Graphics/Title.png");
     }
 
     #[test]
     fn not_found_pattern_match() {
-        let e = FsError::NotFound { path: "x.png".into() };
+        let e = FsError::NotFound {
+            path: "x.png".into(),
+        };
         if let FsError::NotFound { path } = e {
             assert_eq!(path, "x.png");
         } else {
@@ -71,7 +75,9 @@ mod tests {
 
     #[test]
     fn invalid_path_display() {
-        let e = FsError::InvalidPath { reason: "contains backslash".into() };
+        let e = FsError::InvalidPath {
+            reason: "contains backslash".into(),
+        };
         assert!(e.to_string().contains("invalid path:"));
         assert!(e.to_string().contains("backslash"));
     }

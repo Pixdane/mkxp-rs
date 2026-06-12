@@ -34,6 +34,8 @@ wgpu surface 从 `WindowController::window()` 创建，但 `WindowController` �
 wgpu 资源。`GraphicsState` 放在 `SharedRuntime` 中，并由 render thread 使用。
 逻辑游戏尺寸来自 `graphics.game_size` / `--game-size` 进入的
 `RuntimeConfig.game_size`；初始窗口尺寸来自 `window.size` / `--window-size`。
+启动全屏、是否可 resize、初始宽高比锁定分别来自
+`window.fullscreen`、`window.resizable`、`window.fixed_aspect_ratio`。
 
 ## 窗口事件
 

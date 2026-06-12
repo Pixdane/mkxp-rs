@@ -73,13 +73,14 @@ impl SeCache {
         // Evict LRU entries if needed
         while self.current_bytes + data_len > self.max_bytes && !self.order.is_empty() {
             if let Some(evict_path) = self.order.pop_back()
-                && let Some(evicted) = self.entries.remove(&evict_path) {
-                    self.current_bytes = self.current_bytes.saturating_sub(evicted.len());
-                    debug!(path = %evict_path, evicted_bytes = evicted.len(),
+                && let Some(evicted) = self.entries.remove(&evict_path)
+            {
+                self.current_bytes = self.current_bytes.saturating_sub(evicted.len());
+                debug!(path = %evict_path, evicted_bytes = evicted.len(),
                         current_mb = self.current_bytes as f64 / 1_048_576.0,
                         max_mb = self.max_bytes as f64 / 1_048_576.0,
                         "SE cache eviction");
-                }
+            }
         }
 
         self.current_bytes += data_len;
@@ -141,21 +142,21 @@ mod tests {
         // Cache with 3-byte limit: exactly a(1) + b(2) = 3 bytes.
         // Inserting c(1) after touching a should evict b (LRU).
         let mut cache = SeCache::new(3);
-        cache.insert("a.ogg", vec![1]);       // 1 byte
-        cache.insert("b.ogg", vec![2, 2]);    // 2 bytes, total = 3
+        cache.insert("a.ogg", vec![1]); // 1 byte
+        cache.insert("b.ogg", vec![2, 2]); // 2 bytes, total = 3
         cache.get("a.ogg"); // touch a → LRU order: a, b
-        cache.insert("c.ogg", vec![3]);       // 1 byte → evict LRU (b)
+        cache.insert("c.ogg", vec![3]); // 1 byte → evict LRU (b)
         assert!(cache.get("a.ogg").is_some()); // a survived (was MRU)
-        assert!(cache.get("b.ogg").is_none());  // b was LRU, evicted
+        assert!(cache.get("b.ogg").is_none()); // b was LRU, evicted
         assert!(cache.get("c.ogg").is_some()); // c inserted
     }
 
     #[test]
     fn lru_eviction_respects_limit() {
         let mut cache = SeCache::new(3); // 3 bytes max
-        cache.insert("a", vec![1]);       // 1 byte
-        cache.insert("b", vec![2, 2]);    // 2 bytes → total 3
-        cache.insert("c", vec![3]);       // 1 byte → must evict a (1 byte)
+        cache.insert("a", vec![1]); // 1 byte
+        cache.insert("b", vec![2, 2]); // 2 bytes → total 3
+        cache.insert("c", vec![3]); // 1 byte → must evict a (1 byte)
         assert!(cache.get("a").is_none());
         assert!(cache.get("b").is_some());
         assert!(cache.get("c").is_some());
@@ -166,7 +167,7 @@ mod tests {
     fn replace_existing_entry_updates_bytes() {
         let mut cache = SeCache::new(10);
         cache.insert("x", vec![1, 2, 3]); // 3 bytes
-        cache.insert("x", vec![4, 5]);     // 2 bytes, replaces
+        cache.insert("x", vec![4, 5]); // 2 bytes, replaces
         assert_eq!(cache.current_bytes(), 2);
         assert_eq!(cache.get("x"), Some(&[4, 5][..]));
         assert_eq!(cache.len(), 1);

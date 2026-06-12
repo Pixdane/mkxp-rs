@@ -83,7 +83,7 @@ fn advance_lcg(magic: &mut u32) -> u32 {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```text
 /// // See the `tests` module for roundtrip examples with synthetic
 /// // RGSS1 and RGSS3 archives, and ignored integration tests that
 /// // verify parsing against real RPG Maker game files.
@@ -115,7 +115,9 @@ impl RgssArchive {
     /// Returns `FsError::Parse` (via `MkxpError`) for truncated data.
     pub fn parse(raw: Vec<u8>) -> Result<Self, FsError> {
         if raw.len() < 8 {
-            return Err(FsError::parse("RGSS archive too small (expected >= 8 bytes)"));
+            return Err(FsError::parse(
+                "RGSS archive too small (expected >= 8 bytes)",
+            ));
         }
 
         let header = &raw[..8];
@@ -126,7 +128,8 @@ impl RgssArchive {
             Self::parse_rgss3(raw)
         } else {
             Err(FsError::UnsupportedArchive(format!(
-                "unknown RGSS header: {:02X?}", header
+                "unknown RGSS header: {:02X?}",
+                header
             )))
         };
 
@@ -141,10 +144,8 @@ impl RgssArchive {
     ///
     /// Returns `FsError::NotFound` if the path is not in the index.
     pub fn read_file(&self, path: &str) -> Result<Vec<u8>, FsError> {
-        let entry = self.entries.get(path).ok_or_else(|| {
-            FsError::NotFound {
-                path: path.to_string(),
-            }
+        let entry = self.entries.get(path).ok_or_else(|| FsError::NotFound {
+            path: path.to_string(),
         })?;
         let raw = &self.data[entry.offset..entry.offset + entry.size];
         Ok(decrypt_data(raw, entry.start_magic))
@@ -166,7 +167,12 @@ impl RgssArchive {
         let prefix = if dir.is_empty() {
             String::new()
         } else {
-            if !self.directories.contains(dir) && !self.entries.keys().any(|k| k.starts_with(&format!("{dir}/"))) {
+            if !self.directories.contains(dir)
+                && !self
+                    .entries
+                    .keys()
+                    .any(|k| k.starts_with(&format!("{dir}/")))
+            {
                 return Err(FsError::NotADirectory {
                     path: dir.to_string(),
                 });
@@ -277,16 +283,21 @@ impl RgssArchive {
                 directories.insert(dir.to_string());
             }
 
-            entries.insert(name, RgssEntry {
-                offset: data_offset,
-                size: size as usize,
-                start_magic,
-            });
+            entries.insert(
+                name,
+                RgssEntry {
+                    offset: data_offset,
+                    size: size as usize,
+                    start_magic,
+                },
+            );
 
             // Skip past the file data to the next entry header.
             pos = data_offset + size as usize;
             if pos > raw.len() {
-                return Err(FsError::parse("RGSS file data extends past archive end".to_string()));
+                return Err(FsError::parse(
+                    "RGSS file data extends past archive end".to_string(),
+                ));
             }
         }
 
@@ -363,11 +374,14 @@ impl RgssArchive {
                 directories.insert(dir.to_string());
             }
 
-            entries.insert(name, RgssEntry {
-                offset: entry_offset as usize,
-                size: entry_size,
-                start_magic: entry_key,
-            });
+            entries.insert(
+                name,
+                RgssEntry {
+                    offset: entry_offset as usize,
+                    size: entry_size,
+                    start_magic: entry_key,
+                },
+            );
         }
 
         Ok(Self {
@@ -516,7 +530,7 @@ pub fn build_rgss3(files: &[(&str, &[u8])]) -> Vec<u8> {
     }
 
     // Sentinel: zero offset (raw = base_k so that raw ^ base_k = 0).
-    buf.extend_from_slice(&(0u32 ^ base_k).to_le_bytes());
+    buf.extend_from_slice(&base_k.to_le_bytes());
 
     // Pass 3: write encrypted data.
     for (i, (name, data)) in files.iter().enumerate() {
@@ -550,7 +564,10 @@ mod tests {
         // mkxp-z: seeds from MAGIC, advances for each dword.
         // First advance returns MAGIC, then MAGIC*7+3, etc.
         assert_eq!(advance_lcg(&mut m), 0xDEAD_CAFE);
-        assert_eq!(advance_lcg(&mut m), 0xDEAD_CAFE_u32.wrapping_mul(7).wrapping_add(3));
+        assert_eq!(
+            advance_lcg(&mut m),
+            0xDEAD_CAFE_u32.wrapping_mul(7).wrapping_add(3)
+        );
     }
 
     #[test]
@@ -615,11 +632,8 @@ mod tests {
 
     #[test]
     fn roundtrip_rgss1_multiple() {
-        let files: &[(&str, &[u8])] = &[
-            ("a.txt", b"aaa"),
-            ("b.txt", b"bbb"),
-            ("sub/c.txt", b"ccc"),
-        ];
+        let files: &[(&str, &[u8])] =
+            &[("a.txt", b"aaa"), ("b.txt", b"bbb"), ("sub/c.txt", b"ccc")];
         let raw = build_rgss1(files);
         let a = RgssArchive::parse(raw).unwrap();
         assert_eq!(a.file_count(), 3);
@@ -654,7 +668,10 @@ mod tests {
         let raw = build_rgss3(files);
         let a = RgssArchive::parse(raw).unwrap();
         assert_eq!(a.file_count(), 2);
-        assert_eq!(a.read_file("Graphics/Titles/title.png").unwrap(), b"pngdata");
+        assert_eq!(
+            a.read_file("Graphics/Titles/title.png").unwrap(),
+            b"pngdata"
+        );
         assert_eq!(a.read_file("Data/Scripts.rxdata").unwrap(), b"rubyscripts");
     }
 
@@ -724,8 +741,7 @@ mod tests {
     fn shift_jis_filename() {
         // "グラフィック" (Graphics) in Shift_JIS
         let sjis_name: &[u8] = &[
-            0x83, 0x4F, 0x83, 0x89, 0x83, 0x74, 0x83, 0x42,
-            0x83, 0x62, 0x83, 0x4E,
+            0x83, 0x4F, 0x83, 0x89, 0x83, 0x74, 0x83, 0x42, 0x83, 0x62, 0x83, 0x4E,
         ];
         let decoded = decode_filename(sjis_name).unwrap();
         assert!(!decoded.is_empty());
@@ -762,7 +778,7 @@ mod tests {
         let base_k = base_key_raw.wrapping_mul(9).wrapping_add(3);
         buf.extend_from_slice(&base_key_raw.to_le_bytes());
         // Sentinel: zero offset.
-        buf.extend_from_slice(&(0u32 ^ base_k).to_le_bytes());
+        buf.extend_from_slice(&base_k.to_le_bytes());
 
         let a = RgssArchive::parse(buf).unwrap();
         assert_eq!(a.file_count(), 0);

@@ -46,10 +46,14 @@ pub(crate) struct WindowConfig {
     pub title: String,
     /// Initial window inner size in physical pixels.
     pub inner_size: (u32, u32),
+    /// Whether the window should start in borderless fullscreen.
+    pub fullscreen: bool,
     /// Logical game size used for aspect ratio and integer-scale commands.
     pub game_size: (u32, u32),
     /// Whether the window is resizable by the user.
     pub resizable: bool,
+    /// Whether aspect-ratio correction starts enabled in windowed mode.
+    pub fixed_aspect_ratio: bool,
     /// Whether restart/reset commands are enabled.
     pub enable_reset: bool,
 }
@@ -59,8 +63,10 @@ impl Default for WindowConfig {
         Self {
             title: String::new(),
             inner_size: (640, 480),
+            fullscreen: false,
             game_size: (640, 480),
             resizable: true,
+            fixed_aspect_ratio: true,
             enable_reset: true,
         }
     }
@@ -432,14 +438,17 @@ impl WindowController {
         config: WindowConfig,
     ) -> Result<Self, WindowControllerError> {
         let initial_size = PhysicalSize::new(config.inner_size.0, config.inner_size.1);
+        let mut attributes = WindowAttributes::default()
+            .with_title(&config.title)
+            .with_resizable(config.resizable)
+            .with_inner_size(initial_size);
+
+        if config.fullscreen {
+            attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
 
         let window = event_loop
-            .create_window(
-                WindowAttributes::default()
-                    .with_title(&config.title)
-                    .with_resizable(config.resizable)
-                    .with_inner_size(initial_size),
-            )
+            .create_window(attributes)
             .map_err(WindowControllerError::Window)?;
 
         let (menu, receiver, menu_items) =
@@ -448,23 +457,33 @@ impl WindowController {
             title = %config.title,
             width = config.inner_size.0,
             height = config.inner_size.1,
+            fullscreen = config.fullscreen,
+            resizable = config.resizable,
+            fixed_aspect_ratio = config.fixed_aspect_ratio,
             reset_enabled = config.enable_reset,
             "window controller created"
         );
 
-        Ok(Self {
+        let controller = Self {
             window,
             _menu: menu,
             menu_receiver: receiver,
             menu_items,
-            window_mode: WindowMode::Windowed,
-            aspect_locked: false,
+            window_mode: if config.fullscreen {
+                WindowMode::Fullscreen
+            } else {
+                WindowMode::Windowed
+            },
+            aspect_locked: config.fixed_aspect_ratio,
             fullscreen_scale_mode: FullscreenScaleMode::Fit,
             resize_requests: ResizeRequestTracker::default(),
             modifiers: ModifiersState::default(),
             enable_reset: config.enable_reset,
             game_size: config.game_size,
-        })
+        };
+        controller.refresh_menu_marks();
+
+        Ok(controller)
     }
 
     /// Borrow the inner window (for surface creation, etc.).

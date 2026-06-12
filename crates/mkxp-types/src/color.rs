@@ -19,20 +19,33 @@
 /// assert_eq!(black.lerp(white, 0.5), Color::new(127.5, 127.5, 127.5, 255.0));
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Color { pub r: f64, pub g: f64, pub b: f64, pub a: f64 }
+pub struct Color {
+    pub r: f64,
+    pub g: f64,
+    pub b: f64,
+    pub a: f64,
+}
 
 impl Color {
     /// Creates a new `Color`.
-    pub fn new(r: f64, g: f64, b: f64, a: f64) -> Self { Self { r, g, b, a } }
+    pub fn new(r: f64, g: f64, b: f64, a: f64) -> Self {
+        Self { r, g, b, a }
+    }
 
     /// Opaque black — the RGSS default colour.
-    pub fn black() -> Self { Self::new(0.0, 0.0, 0.0, 255.0) }
+    pub fn black() -> Self {
+        Self::new(0.0, 0.0, 0.0, 255.0)
+    }
 
     /// Opaque white.
-    pub fn white() -> Self { Self::new(255.0, 255.0, 255.0, 255.0) }
+    pub fn white() -> Self {
+        Self::new(255.0, 255.0, 255.0, 255.0)
+    }
 
     /// Fully transparent.
-    pub fn transparent() -> Self { Self::new(0.0, 0.0, 0.0, 0.0) }
+    pub fn transparent() -> Self {
+        Self::new(0.0, 0.0, 0.0, 0.0)
+    }
 
     /// Linear interpolation towards `other` by `t` where `0.0 <= t <= 1.0`.
     pub fn lerp(self, other: Self, t: f64) -> Self {
@@ -45,7 +58,11 @@ impl Color {
     }
 }
 
-impl Default for Color { fn default() -> Self { Self::black() } }
+impl Default for Color {
+    fn default() -> Self {
+        Self::black()
+    }
+}
 
 // -- Tone ---------------------------------------------------------------
 
@@ -64,14 +81,23 @@ impl Default for Color { fn default() -> Self { Self::black() } }
 /// let sepia = Tone::new(50.0, -30.0, -80.0, 10.0);
 /// ```
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
-pub struct Tone { pub r: f64, pub g: f64, pub b: f64, pub gray: f64 }
+pub struct Tone {
+    pub r: f64,
+    pub g: f64,
+    pub b: f64,
+    pub gray: f64,
+}
 
 impl Tone {
     /// Creates a new `Tone`.
-    pub fn new(r: f64, g: f64, b: f64, gray: f64) -> Self { Self { r, g, b, gray } }
+    pub fn new(r: f64, g: f64, b: f64, gray: f64) -> Self {
+        Self { r, g, b, gray }
+    }
 
     /// Neutral tone — no adjustment applied.
-    pub fn neutral() -> Self { Self::new(0.0, 0.0, 0.0, 0.0) }
+    pub fn neutral() -> Self {
+        Self::new(0.0, 0.0, 0.0, 0.0)
+    }
 }
 
 #[cfg(test)]

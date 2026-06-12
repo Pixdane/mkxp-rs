@@ -1,8 +1,6 @@
 use crate::geometry::Vertex;
 use wgpu::util::DeviceExt;
 
-
-
 /// 传递给 FlatColor pipeline 的 uniform 数据。
 ///
 /// `#[repr(C)]` 保证内存布局和 WGSL struct 对齐。
@@ -21,10 +19,7 @@ pub struct PipelineSet {
 
 impl PipelineSet {
     /// 创建所有 pipeline。
-    pub fn new(
-        device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flat_color"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/flat_color.wgsl").into()),

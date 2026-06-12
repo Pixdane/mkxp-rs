@@ -27,23 +27,40 @@ use crate::Vec2i;
 /// assert_eq!(r, Rect::new(1, 2, 3, 4));
 /// ```
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct Rect { pub x: i32, pub y: i32, pub width: i32, pub height: i32 }
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
 
 impl Rect {
     /// Creates a new `Rect`.
-    pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self { Self { x, y, width, height } }
+    pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
 
     /// An empty rectangle at the origin — `(0, 0, 0, 0)`.
-    pub fn empty() -> Self { Self::new(0, 0, 0, 0) }
+    pub fn empty() -> Self {
+        Self::new(0, 0, 0, 0)
+    }
 
     /// Returns `true` when width or height is zero or negative.
-    pub fn is_empty(self) -> bool { self.width <= 0 || self.height <= 0 }
+    pub fn is_empty(self) -> bool {
+        self.width <= 0 || self.height <= 0
+    }
 
     /// Returns `true` when `point` lies inside the rectangle.
     ///
     /// The left and top edges are inclusive; right and bottom are exclusive.
     pub fn contains_point(self, point: Vec2i) -> bool {
-        point.x >= self.x && point.y >= self.y
+        point.x >= self.x
+            && point.y >= self.y
             && point.x < self.x + self.width
             && point.y < self.y + self.height
     }
@@ -55,8 +72,11 @@ impl Rect {
         let y1 = self.y.max(other.y);
         let x2 = (self.x + self.width).min(other.x + other.width);
         let y2 = (self.y + self.height).min(other.y + other.height);
-        if x2 <= x1 || y2 <= y1 { Rect::empty() }
-        else { Rect::new(x1, y1, x2 - x1, y2 - y1) }
+        if x2 <= x1 || y2 <= y1 {
+            Rect::empty()
+        } else {
+            Rect::new(x1, y1, x2 - x1, y2 - y1)
+        }
     }
 
     /// Translates by `(d.x, d.y)` without changing size.
@@ -66,7 +86,10 @@ impl Rect {
 
     /// Sets all four fields at once — matches the RGSS `Rect#set` idiom.
     pub fn set(&mut self, x: i32, y: i32, width: i32, height: i32) {
-        self.x = x; self.y = y; self.width = width; self.height = height;
+        self.x = x;
+        self.y = y;
+        self.width = width;
+        self.height = height;
     }
 }
 
@@ -87,18 +110,34 @@ impl Rect {
 /// assert_eq!(fr, FloatRect::new(10.0, 20.0, 640.0, 480.0));
 /// ```
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
-pub struct FloatRect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
+pub struct FloatRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
 
 impl FloatRect {
     /// Creates a new `FloatRect`.
-    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self { Self { x, y, width, height } }
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
 
     /// Returns `true` when width or height is zero or negative.
-    pub fn is_empty(self) -> bool { self.width <= 0.0 || self.height <= 0.0 }
+    pub fn is_empty(self) -> bool {
+        self.width <= 0.0 || self.height <= 0.0
+    }
 }
 
 impl From<Rect> for FloatRect {
-    fn from(r: Rect) -> Self { Self::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32) }
+    fn from(r: Rect) -> Self {
+        Self::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
+    }
 }
 
 #[cfg(test)]

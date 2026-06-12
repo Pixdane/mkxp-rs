@@ -77,7 +77,7 @@ impl FileSystem {
 
     /// Check whether a file exists.
     ///
-    /// Same lookup logic as [`read`], but skips the actual I/O.
+    /// Same lookup logic as [`Self::read`], but skips the actual I/O.
     pub fn exists(&self, path: &str) -> bool {
         let resolved = match self.resolve_path(path) {
             Ok(p) => p,
@@ -96,10 +96,8 @@ impl FileSystem {
     /// Returns `FsError` if `dir` is not a valid virtual path or if
     /// enumeration of a mount source fails unexpectedly.
     pub fn read_dir(&self, dir: &str) -> Result<Vec<String>, FsError> {
-        let vdir = VPath::new(dir).map_err(|e| {
-            FsError::InvalidPath {
-                reason: e.to_string(),
-            }
+        let vdir = VPath::new(dir).map_err(|e| FsError::InvalidPath {
+            reason: e.to_string(),
         })?;
 
         let mut entries = Vec::new();
@@ -127,7 +125,7 @@ impl FileSystem {
     ///
     /// Walks every mounted source to collect all known virtual paths,
     /// then builds a `lowercase → real-case` mapping.  After this call,
-    /// [`read`] and [`exists`] become case-insensitive.
+    /// [`Self::read`] and [`Self::exists`] become case-insensitive.
     ///
     /// This should be called once after all sources have been mounted.
     pub fn build_path_cache(&mut self) -> Result<(), FsError> {
@@ -179,7 +177,10 @@ impl FileSystem {
 
     /// Check whether `vp` exists in any mounted source (reverse order).
     fn try_exists(&self, vp: &VPath) -> bool {
-        self.mounts.iter().rev().any(|(_, source)| source.exists(vp))
+        self.mounts
+            .iter()
+            .rev()
+            .any(|(_, source)| source.exists(vp))
     }
 }
 
@@ -260,7 +261,10 @@ mod tests {
         let (_td, rd) = temp_real_dir(&[]);
         let mut fs = FileSystem::new();
         fs.mount(Box::new(rd), &VPath::new("").unwrap());
-        assert!(matches!(fs.read("nope.txt").unwrap_err(), FsError::NotFound { .. }));
+        assert!(matches!(
+            fs.read("nope.txt").unwrap_err(),
+            FsError::NotFound { .. }
+        ));
     }
 
     #[test]
@@ -395,7 +399,10 @@ mod tests {
         assert!(fs.exists("Graphics/Titles/title.png"));
         assert_eq!(fs.read("Graphics/Titles/title.png").unwrap(), b"pngdata");
         assert_eq!(fs.read("Data/Scripts.rxdata").unwrap(), b"rubyscripts");
-        assert!(matches!(fs.read("nope.txt").unwrap_err(), FsError::NotFound { .. }));
+        assert!(matches!(
+            fs.read("nope.txt").unwrap_err(),
+            FsError::NotFound { .. }
+        ));
     }
 
     #[test]

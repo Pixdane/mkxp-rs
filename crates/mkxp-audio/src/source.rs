@@ -68,15 +68,15 @@ impl AudioSource {
     /// Load audio data from the virtual [`mkxp_fs::FileSystem`].
     ///
     /// The format is automatically detected from the file extension.
-    /// Returns [`AudioError::FileNotFound`] if the path does not exist,
-    /// or [`AudioError::UnsupportedFormat`] if the extension is unknown.
+    /// Returns [`crate::AudioError::FileNotFound`] if the path does not exist,
+    /// or [`crate::AudioError::UnsupportedFormat`] if the extension is unknown.
     pub fn from_filesystem(fs: &mkxp_fs::FileSystem, path: &str) -> AudioResult<Self> {
         let data = fs
             .read(path)
             .map_err(|_| crate::AudioError::file_not_found(path))?;
         let ext = path.rsplit('.').next().unwrap_or("");
-        let format = AudioFormat::from_extension(ext)
-            .ok_or_else(|| crate::AudioError::unsupported(path))?;
+        let format =
+            AudioFormat::from_extension(ext).ok_or_else(|| crate::AudioError::unsupported(path))?;
         Ok(Self {
             data,
             format,

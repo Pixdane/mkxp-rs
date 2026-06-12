@@ -193,10 +193,9 @@ impl VPath {
         if self.0.is_empty() {
             return None;
         }
-        self.0.rfind('/').map_or(
-            Some(&self.0[..]),
-            |pos| Some(&self.0[pos + 1..]),
-        )
+        self.0
+            .rfind('/')
+            .map_or(Some(&self.0[..]), |pos| Some(&self.0[pos + 1..]))
     }
 
     /// The file extension (without the leading dot), or `None`.

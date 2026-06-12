@@ -20,10 +20,10 @@
 
 mod error;
 mod filesystem;
-mod vpath;
 pub mod mountable;
 pub mod path_cache;
 pub mod rgss;
+mod vpath;
 
 pub use error::FsError;
 pub use filesystem::FileSystem;

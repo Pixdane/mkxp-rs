@@ -53,16 +53,22 @@ impl AudioError {
 
     /// Shorthand for a MIDI processing error.
     pub fn midi(reason: impl Into<String>) -> Self {
-        Self::Midi { reason: reason.into() }
+        Self::Midi {
+            reason: reason.into(),
+        }
     }
 
     /// Shorthand for a SoundFont loading error.
     pub fn soundfont(reason: impl Into<String>) -> Self {
-        Self::SoundFont { reason: reason.into() }
+        Self::SoundFont {
+            reason: reason.into(),
+        }
     }
 
     /// Shorthand for an audio device error.
     pub fn device(reason: impl Into<String>) -> Self {
-        Self::Device { reason: reason.into() }
+        Self::Device {
+            reason: reason.into(),
+        }
     }
 }

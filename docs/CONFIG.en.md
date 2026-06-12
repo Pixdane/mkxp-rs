@@ -45,20 +45,20 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 |-------|------|---------|-------------|
 | `title` | `String` | `""` | Window title. When empty, the value from `Game.ini` Title is used. |
 | `size` | `(i32, i32)` | `(640, 480)` | Initial window size in physical pixels. The game logical resolution is `graphics.game_size`. |
-| `fullscreen` | `bool` | `false` | Whether to start in fullscreen mode. Alt+Enter toggles at runtime regardless of this setting. |
+| `fullscreen` | `bool` | `false` | Whether to start in borderless fullscreen mode. Alt+Enter toggles at runtime regardless of this setting. |
 | `resizable` | `bool` | `true` | Whether the user can drag the window edges to change its size. |
 | `fixed_aspect_ratio` | `bool` | `true` | When the window is resized, preserve the game screen aspect ratio with letterboxing. |
-| `integer_scaling` | `bool` | `false` | Scale the game screen by an integer factor before filling remaining space. |
-| `frame_skip` | `bool` | `false` | Skip rendering a frame when the engine is running behind schedule. |
+| `integer_scaling` | `bool` | `false` | Parsed for compatibility, but not wired into the current renderer yet. Use the View menu for runtime integer-scale commands. |
+| `frame_skip` | `bool` | `false` | Parsed for compatibility, but not wired into the current render host yet. |
 
 ### graphics
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `vsync` | `bool` | `true` | Wait for the display vertical blank before swapping buffers to prevent screen tearing. |
-| `sync_to_refresh_rate` | `bool` | `false` | Match frame timing to the display refresh rate, and report the true frame rate back to Ruby scripts. Force-disabled if the refresh rate cannot be determined. |
+| `sync_to_refresh_rate` | `bool` | `false` | Parsed for compatibility, but not wired into the current render host yet. |
 | `frame_rate` | `u32` | `60` | Cap the frame rate to this value. `0` disables the render-host FPS gate; nonzero values are clamped to `1..=240`. |
-| `game_size` | `(i32, i32)` | `(640, 480)` | Logical game resolution used for viewport aspect ratio, integer scaling, and script-facing graphics size. |
+| `game_size` | `(i32, i32)` | `(640, 480)` | Logical game resolution used for viewport aspect ratio, integer scaling, and script-facing graphics size. Non-positive values fall back to the reference default. |
 | `scale_mode` | ScaleMode | `"bilinear"` | Default scaling algorithm for screen upscale, downscale, and bitmap scaling. One of `"nearest"` `"bilinear"` `"bicubic"` `"lanczos3"` `"xbrz"`. |
 | `scale_up` | `Option<ScaleMode>` | `None` | Override the screen upscale algorithm. `None` inherits from `scale_mode`. |
 | `scale_down` | `Option<ScaleMode>` | `None` | Override the screen downscale algorithm. |

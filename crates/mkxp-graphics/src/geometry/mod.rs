@@ -1,5 +1,5 @@
-pub mod vertex;
 pub mod quad;
+pub mod vertex;
 
-pub use vertex::Vertex;
 pub use quad::Quad;
+pub use vertex::Vertex;

@@ -30,8 +30,8 @@ mod error;
 pub(crate) mod layer;
 
 use std::fmt;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 pub use error::LogError;
 
@@ -302,12 +302,13 @@ impl From<&mkxp_config::Config> for LogConfig {
     fn from(config: &mkxp_config::Config) -> Self {
         // log_level string takes highest priority
         if let Some(ref level_str) = config.debug.log_level
-            && let Some(level) = parse_log_level(level_str) {
-                return LogConfig {
-                    default_level: level,
-                    ..Default::default()
-                };
-            }
+            && let Some(level) = parse_log_level(level_str)
+        {
+            return LogConfig {
+                default_level: level,
+                ..Default::default()
+            };
+        }
 
         // Fall back to debug.mode
         config_from_debug_mode(config.debug.mode.unwrap_or(false))
@@ -485,11 +486,8 @@ mod tests {
         // Use set_default instead of try_init so the test is repeatable.
         let config = LogConfig::default();
         let filter = build_filter(&config);
-        let layer = layer::MkxpLayer::new(LogTarget::Stderr, false)
-            .expect("create stderr layer");
-        let subscriber = tracing_subscriber::registry()
-            .with(filter)
-            .with(layer);
+        let layer = layer::MkxpLayer::new(LogTarget::Stderr, false).expect("create stderr layer");
+        let subscriber = tracing_subscriber::registry().with(filter).with(layer);
         let _guard = tracing::subscriber::set_default(subscriber);
 
         // Smoke test: emit a log and verify it doesn't panic.

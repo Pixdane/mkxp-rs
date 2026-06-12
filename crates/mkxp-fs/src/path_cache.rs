@@ -45,9 +45,7 @@ impl PathCache {
     /// # Errors
     ///
     /// Returns `FsError` if enumeration of any mount source fails.
-    pub fn build(
-        mounts: &[(VPath, Box<dyn Mountable>)],
-    ) -> Result<Self, FsError> {
+    pub fn build(mounts: &[(VPath, Box<dyn Mountable>)]) -> Result<Self, FsError> {
         let mut lower_to_real = HashMap::new();
 
         // Walk in reverse — later mounts win over earlier ones.
@@ -61,9 +59,7 @@ impl PathCache {
     /// Create a path cache from a pre-built map.  Intended for tests.
     #[doc(hidden)]
     pub fn from_map(map: HashMap<String, String>) -> Self {
-        Self {
-            lower_to_real: map,
-        }
+        Self { lower_to_real: map }
     }
 
     /// Resolve a lowercased path to its real mixed-case form.

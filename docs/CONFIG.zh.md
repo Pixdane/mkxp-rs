@@ -45,20 +45,20 @@ MKXP_* 环境变量              最高优先级
 |------|------|--------|------|
 | `title` | `String` | `""` | 窗口标题。为空时使用 Game.ini 的 Title 字段值。 |
 | `size` | `(i32, i32)` | `(640, 480)` | 初始窗口物理尺寸。游戏逻辑分辨率使用 `graphics.game_size`。 |
-| `fullscreen` | `bool` | `false` | 是否以全屏模式启动。运行时可用 Alt+Enter 切换，不受此设置影响。 |
+| `fullscreen` | `bool` | `false` | 是否以无边框全屏模式启动。运行时可用 Alt+Enter 切换，不受此设置影响。 |
 | `resizable` | `bool` | `true` | 是否允许用户拖拽窗口边缘改变尺寸。 |
 | `fixed_aspect_ratio` | `bool` | `true` | 窗口尺寸改变时是否保持游戏画面宽高比，多余空间以黑边填充。 |
-| `integer_scaling` | `bool` | `false` | 是否以整数倍缩放画面后再填充剩余空间。 |
-| `frame_skip` | `bool` | `false` | 当引擎渲染速度落后于帧计划时是否跳过当前帧。 |
+| `integer_scaling` | `bool` | `false` | 为兼容配置格式而解析，但当前 renderer 尚未接入。运行时整数倍缩放请使用 View 菜单。 |
+| `frame_skip` | `bool` | `false` | 为兼容配置格式而解析，但当前 render host 尚未接入。 |
 
 ### graphics
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `vsync` | `bool` | `true` | 是否等待显示器垂直同步信号后再交换缓冲区，以消除画面撕裂。 |
-| `sync_to_refresh_rate` | `bool` | `false` | 是否将帧时序同步到显示器刷新率，并将真实帧率报告回 Ruby 脚本。如果无法检测刷新率则强制禁用。 |
+| `sync_to_refresh_rate` | `bool` | `false` | 为兼容配置格式而解析，但当前 render host 尚未接入。 |
 | `frame_rate` | `u32` | `60` | 帧率上限。`0` 会关闭 render-host 的 FPS gate；非 0 值会限制在 `1..=240`。 |
-| `game_size` | `(i32, i32)` | `(640, 480)` | 游戏逻辑分辨率，用于 viewport 宽高比、整数倍缩放和脚本侧 graphics 尺寸。 |
+| `game_size` | `(i32, i32)` | `(640, 480)` | 游戏逻辑分辨率，用于 viewport 宽高比、整数倍缩放和脚本侧 graphics 尺寸。非正值会回退到参考默认值。 |
 | `scale_mode` | ScaleMode | `"bilinear"` | 默认缩放算法，作用于画面放大、缩小和位图缩放。可选 `"nearest"` `"bilinear"` `"bicubic"` `"lanczos3"` `"xbrz"`。 |
 | `scale_up` | `Option<ScaleMode>` | `None` | 覆写画面放大算法。`None` 表示跟随 `scale_mode`。 |
 | `scale_down` | `Option<ScaleMode>` | `None` | 覆写画面缩小算法。 |

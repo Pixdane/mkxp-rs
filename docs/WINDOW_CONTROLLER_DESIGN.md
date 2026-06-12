@@ -130,6 +130,8 @@ WindowController {
 - modifier key状态
 - 全屏和宽高比修正规则
 - reset/restart 菜单启用状态
+- 启动时从 `RuntimeConfig` 传入的 `fullscreen`、`resizable`、
+  `fixed_aspect_ratio` 初始策略
 - 从 `RuntimeConfig.game_size` 传入的逻辑游戏尺寸
 
 纯策略 helper，例如 `fit_aspect_size`、`window_scale_mark`、`classify_resize`

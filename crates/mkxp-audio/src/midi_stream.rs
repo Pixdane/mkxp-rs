@@ -7,16 +7,19 @@
 //! audio callback.  Constant memory usage (~2 seconds of audio).
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::{HeapRb, traits::{Consumer, Producer, Split}};
+use ringbuf::{
+    HeapRb,
+    traits::{Consumer, Producer, Split},
+};
 use rustysynth::{MidiFile, MidiFileSequencer};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
 use tracing::{debug, error};
 
-use crate::midi::MidiEngine;
 use crate::AudioResult;
+use crate::midi::MidiEngine;
 
 /// A real-time MIDI audio stream.
 ///
@@ -53,19 +56,14 @@ impl MidiStream {
     /// * `midi_bytes` — raw SMF data.
     /// * `engine` — the loaded MIDI engine (SoundFont + settings).
     /// * `do_loop` — if `true`, loops at the RPG Maker CC 111 marker.
-    pub fn new(
-        midi_bytes: &[u8],
-        engine: &MidiEngine,
-        do_loop: bool,
-    ) -> AudioResult<Self> {
+    pub fn new(midi_bytes: &[u8], engine: &MidiEngine, do_loop: bool) -> AudioResult<Self> {
         debug!(len = midi_bytes.len(), do_loop, "MIDI stream starting");
         let sample_rate = engine.sample_rate() as u32;
         let block = engine.block_size();
         let synth = engine.create_synthesizer()?;
         let mut cursor = std::io::Cursor::new(midi_bytes);
         let midi = Arc::new(
-            MidiFile::new(&mut cursor)
-                .map_err(|e| crate::AudioError::midi(format!("{:?}", e)))?,
+            MidiFile::new(&mut cursor).map_err(|e| crate::AudioError::midi(format!("{:?}", e)))?,
         );
 
         // Ring buffer: 2 seconds of stereo f32 = sample_rate * 2 channels * 2 sec
@@ -107,18 +105,17 @@ impl MidiStream {
                     }
                 }
 
-                if seq.end_of_sequence()
-                    && !do_loop {
-                        // Drain remaining audio, then stop
-                        for _ in 0..50 {
-                            seq.render(&mut left, &mut right);
-                            for (&l, &r) in left.iter().zip(right.iter()) {
-                                let _ = prod.try_push(l);
-                                let _ = prod.try_push(r);
-                            }
+                if seq.end_of_sequence() && !do_loop {
+                    // Drain remaining audio, then stop
+                    for _ in 0..50 {
+                        seq.render(&mut left, &mut right);
+                        for (&l, &r) in left.iter().zip(right.iter()) {
+                            let _ = prod.try_push(l);
+                            let _ = prod.try_push(r);
                         }
-                        break;
                     }
+                    break;
+                }
             }
         });
 
@@ -181,8 +178,8 @@ impl MidiStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ringbuf::traits::{Consumer, Observer, Producer};
     use crate::MidiEngine;
+    use ringbuf::traits::{Consumer, Observer, Producer};
 
     /// MidiEngine with embedded SF2 creates without panic.
     #[test]

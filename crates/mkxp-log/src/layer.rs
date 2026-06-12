@@ -100,7 +100,12 @@ where
         }
     }
 
-    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: Context<'_, S>) {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
         if !self.log_spans {
             return;
         }
@@ -136,7 +141,10 @@ where
         }
 
         // Append initial field values
-        let mut visitor = SpanFieldVisitor { buf: &mut buf, first: true };
+        let mut visitor = SpanFieldVisitor {
+            buf: &mut buf,
+            first: true,
+        };
         attrs.record(&mut visitor);
 
         buf.push('\n');
@@ -224,33 +232,57 @@ struct SpanFieldVisitor<'a> {
 
 impl<'a> tracing::field::Visit for SpanFieldVisitor<'a> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if self.first { self.buf.push_str(": "); self.first = false; }
-        else { self.buf.push(' '); }
+        if self.first {
+            self.buf.push_str(": ");
+            self.first = false;
+        } else {
+            self.buf.push(' ');
+        }
         let _ = write!(self.buf, "{}={}", field.name(), field_format(value));
     }
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if self.first { self.buf.push_str(": "); self.first = false; }
-        else { self.buf.push(' '); }
+        if self.first {
+            self.buf.push_str(": ");
+            self.first = false;
+        } else {
+            self.buf.push(' ');
+        }
         let _ = write!(self.buf, "{}={}", field.name(), value);
     }
     fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
-        if self.first { self.buf.push_str(": "); self.first = false; }
-        else { self.buf.push(' '); }
+        if self.first {
+            self.buf.push_str(": ");
+            self.first = false;
+        } else {
+            self.buf.push(' ');
+        }
         let _ = write!(self.buf, "{}={}", field.name(), value);
     }
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        if self.first { self.buf.push_str(": "); self.first = false; }
-        else { self.buf.push(' '); }
+        if self.first {
+            self.buf.push_str(": ");
+            self.first = false;
+        } else {
+            self.buf.push(' ');
+        }
         let _ = write!(self.buf, "{}={}", field.name(), value);
     }
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        if self.first { self.buf.push_str(": "); self.first = false; }
-        else { self.buf.push(' '); }
+        if self.first {
+            self.buf.push_str(": ");
+            self.first = false;
+        } else {
+            self.buf.push(' ');
+        }
         let _ = write!(self.buf, "{}={}", field.name(), value);
     }
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        if self.first { self.buf.push_str(": "); self.first = false; }
-        else { self.buf.push(' '); }
+        if self.first {
+            self.buf.push_str(": ");
+            self.first = false;
+        } else {
+            self.buf.push(' ');
+        }
         let _ = write!(self.buf, "{}={}", field.name(), value);
     }
 }
@@ -270,7 +302,10 @@ impl<'a> tracing::field::Visit for EventVisitor<'a> {
     }
 
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.record_impl(field, |b| { b.push_str(value); Ok(()) })
+        self.record_impl(field, |b| {
+            b.push_str(value);
+            Ok(())
+        })
     }
 
     fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
@@ -349,9 +384,8 @@ fn open_writers(targets: Vec<LogTarget>) -> Result<Vec<Mutex<Box<dyn Write + Sen
                 LogTarget::Stderr => Box::new(std::io::stderr()),
                 LogTarget::File(path) => {
                     if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| {
-                            LogError::create_dir(parent.display().to_string(), e)
-                        })?;
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| LogError::create_dir(parent.display().to_string(), e))?;
                     }
                     let file = std::fs::OpenOptions::new()
                         .create(true)
@@ -416,8 +450,7 @@ mod tests {
         }
     }
 
-    fn captured_layer_and_writer(
-    ) -> (Arc<StdMutex<Vec<u8>>>, MkxpLayer) {
+    fn captured_layer_and_writer() -> (Arc<StdMutex<Vec<u8>>>, MkxpLayer) {
         let tw = TestWriter::new();
         let buf = tw.clone_buf();
         let layer = MkxpLayer {
@@ -436,8 +469,16 @@ mod tests {
         info!("hello world");
 
         let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        assert!(out.contains("INFO"), "expected INFO in output, got: {}", out);
-        assert!(out.contains("hello world"), "expected message, got: {}", out);
+        assert!(
+            out.contains("INFO"),
+            "expected INFO in output, got: {}",
+            out
+        );
+        assert!(
+            out.contains("hello world"),
+            "expected message, got: {}",
+            out
+        );
         assert!(out.ends_with('\n'), "expected trailing newline");
     }
 
@@ -465,8 +506,16 @@ mod tests {
         info!("info test");
 
         let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        assert!(out.contains("WARN "), "expected WARN  with padding, got: {}", out);
-        assert!(out.contains("INFO "), "expected INFO  with padding, got: {}", out);
+        assert!(
+            out.contains("WARN "),
+            "expected WARN  with padding, got: {}",
+            out
+        );
+        assert!(
+            out.contains("INFO "),
+            "expected INFO  with padding, got: {}",
+            out
+        );
     }
 
     #[test]
@@ -478,7 +527,11 @@ mod tests {
         info!(abc = "xyz");
 
         let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        assert!(out.contains("abc=xyz"), "expected field as message, got: {}", out);
+        assert!(
+            out.contains("abc=xyz"),
+            "expected field as message, got: {}",
+            out
+        );
     }
 
     #[test]
@@ -487,9 +540,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("test.log");
 
-        let layer =
-            MkxpLayer::new(LogTarget::File(path.clone()), false)
-                .expect("create layer with file target");
+        let layer = MkxpLayer::new(LogTarget::File(path.clone()), false)
+            .expect("create layer with file target");
 
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -497,7 +549,10 @@ mod tests {
 
         assert!(path.exists(), "log file should exist");
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("file target test"), "expected log content in file");
+        assert!(
+            contents.contains("file target test"),
+            "expected log content in file"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -509,10 +564,13 @@ mod tests {
         let path_a = dir.join("a.log");
         let path_b = dir.join("b.log");
 
-        let layer = MkxpLayer::new(LogTarget::Composite(vec![
-            LogTarget::File(path_a.clone()),
-            LogTarget::File(path_b.clone()),
-        ]), false)
+        let layer = MkxpLayer::new(
+            LogTarget::Composite(vec![
+                LogTarget::File(path_a.clone()),
+                LogTarget::File(path_b.clone()),
+            ]),
+            false,
+        )
         .expect("create composite layer");
 
         let subscriber = tracing_subscriber::registry().with(layer);
@@ -560,7 +618,6 @@ mod tests {
         assert!(matches!(flat[0], LogTarget::File(_)));
     }
 
-
     #[test]
     fn span_logs_creation_and_close_with_duration() {
         let (buf, layer) = captured_layer_and_writer_with_spans();
@@ -579,7 +636,11 @@ mod tests {
         assert!(out.contains("SPAN+"), "expected SPAN+ line, got: {}", out);
         assert!(out.contains("SPAN-"), "expected SPAN- line, got: {}", out);
         assert!(out.contains("my_job"), "expected span name, got: {}", out);
-        assert!(out.contains("work=rendering"), "expected span fields, got: {}", out);
+        assert!(
+            out.contains("work=rendering"),
+            "expected span fields, got: {}",
+            out
+        );
         assert!(out.contains("dur="), "expected duration, got: {}", out);
     }
 
@@ -602,8 +663,7 @@ mod tests {
         assert!(out.contains("only event"), "event should still appear");
     }
 
-    fn captured_layer_and_writer_with_spans(
-    ) -> (Arc<StdMutex<Vec<u8>>>, MkxpLayer) {
+    fn captured_layer_and_writer_with_spans() -> (Arc<StdMutex<Vec<u8>>>, MkxpLayer) {
         let tw = TestWriter::new();
         let buf = tw.clone_buf();
         let layer = MkxpLayer {

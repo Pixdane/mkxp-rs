@@ -1,16 +1,18 @@
-use kira::{AudioManager as KiraManager, AudioManagerSettings, DefaultBackend, Tween, PlaybackRate};
-use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings, StaticSoundHandle};
+use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::track::{TrackBuilder, TrackHandle};
+use kira::{
+    AudioManager as KiraManager, AudioManagerSettings, DefaultBackend, PlaybackRate, Tween,
+};
 use std::io::Cursor;
 
-use tracing::{info, warn, debug, trace, error, instrument};
+use tracing::{debug, error, info, instrument, trace, warn};
 
+use crate::AudioResult;
 use crate::midi::MidiEngine;
 use crate::midi_stream::MidiStream;
 use crate::se_cache::SeCache;
 use crate::source::AudioSource;
-use crate::types::{Volume, Pitch};
-use crate::AudioResult;
+use crate::types::{Pitch, Volume};
 
 /// Convert linear amplitude (0.0–1.0) to decibels for kira's volume API.
 ///
@@ -152,11 +154,10 @@ impl AudioManager {
                 "use bgm_play for MIDI files (they are automatically detected)",
             ));
         }
-        StaticSoundData::from_cursor(Cursor::new(source.data.clone()))
-            .map_err(|e| {
-                warn!(path = %source.path(), error = %e, "audio decode failed, skipping");
-                crate::AudioError::device(format!("decode: {}", e))
-            })
+        StaticSoundData::from_cursor(Cursor::new(source.data.clone())).map_err(|e| {
+            warn!(path = %source.path(), error = %e, "audio decode failed, skipping");
+            crate::AudioError::device(format!("decode: {}", e))
+        })
     }
 
     fn bgs_track_mut(&mut self) -> AudioResult<&mut TrackHandle> {
@@ -184,9 +185,7 @@ impl AudioManager {
     fn apply_pitch(sound: StaticSoundData, pitch: Pitch) -> StaticSoundData {
         let rate = pitch.as_multiplier();
         if (rate - 1.0).abs() > f64::EPSILON {
-            sound.with_settings(
-                StaticSoundSettings::new().playback_rate(PlaybackRate(rate)),
-            )
+            sound.with_settings(StaticSoundSettings::new().playback_rate(PlaybackRate(rate)))
         } else {
             sound
         }
@@ -209,12 +208,18 @@ impl AudioManager {
             if let Some(handle) = handle_opt {
                 let base = self.bgm_base_volumes.get(i).copied().unwrap_or(1.0);
                 let effective = base * self.bgm_ratio * self.bgm_external;
-                trace!(track = i, base, ratio = self.bgm_ratio, external = self.bgm_external, effective, "BGM volume applied");
+                trace!(
+                    track = i,
+                    base,
+                    ratio = self.bgm_ratio,
+                    external = self.bgm_external,
+                    effective,
+                    "BGM volume applied"
+                );
                 handle.set_volume(amplitude_to_db(effective), Tween::default());
             }
         }
     }
-
 
     // ── ME/BGM interaction ──────────────────────────────────────────
 
@@ -234,10 +239,11 @@ impl AudioManager {
     /// Called before any BGM-affecting operation.
     fn tick_me_watch(&mut self) {
         if let Some(ref h) = self.me_handle
-            && matches!(h.state(), kira::sound::PlaybackState::Stopped) {
-                debug!("ME finished, restoring BGM");
-                self.restore_bgm_after_me();
-            }
+            && matches!(h.state(), kira::sound::PlaybackState::Stopped)
+        {
+            debug!("ME finished, restoring BGM");
+            self.restore_bgm_after_me();
+        }
     }
 
     // ── BGM ─────────────────────────────────────────────────────────────
@@ -268,7 +274,9 @@ impl AudioManager {
             }
         }
 
-        let idx = if track == -127 { 0 } else {
+        let idx = if track == -127 {
+            0
+        } else {
             (track.max(0) as usize).min(self.bgm_handles.len().saturating_sub(1))
         };
 
@@ -284,9 +292,7 @@ impl AudioManager {
 
         let sound = Self::apply_pitch(self.load_static(source)?, Pitch::new(pitch));
         let mut handle = self.bgm_tracks[idx]
-            .play(sound.with_settings(
-                StaticSoundSettings::new().loop_region(..),
-            ))
+            .play(sound.with_settings(StaticSoundSettings::new().loop_region(..)))
             .map_err(|e| crate::AudioError::device(format!("bgm play: {}", e)))?;
         if let Some(entry) = self.bgm_base_volumes.get_mut(idx) {
             *entry = Volume::new(volume).as_f64();
@@ -379,7 +385,9 @@ impl AudioManager {
         debug!(volume, track, "BGM setvolume");
         let vol = Volume::new(volume).as_f64();
         match Self::resolve_track(track, self.bgm_handles.len()) {
-            None => { self.bgm_ratio = vol; }
+            None => {
+                self.bgm_ratio = vol;
+            }
             Some(idx) => {
                 if let Some(entry) = self.bgm_base_volumes.get_mut(idx) {
                     *entry = vol;
@@ -425,11 +433,12 @@ impl AudioManager {
         let sound = Self::apply_pitch(self.load_static(source)?, Pitch::new(pitch));
         let track = self.bgs_track_mut()?;
         let mut handle = track
-            .play(sound.with_settings(
-                StaticSoundSettings::new().loop_region(..),
-            ))
+            .play(sound.with_settings(StaticSoundSettings::new().loop_region(..)))
             .map_err(|e| crate::AudioError::device(format!("bgs: {}", e)))?;
-        handle.set_volume(amplitude_to_db(Volume::new(volume).as_f64()), Tween::default());
+        handle.set_volume(
+            amplitude_to_db(Volume::new(volume).as_f64()),
+            Tween::default(),
+        );
         if pos > 0.0 {
             handle.seek_to(pos);
         }
@@ -461,12 +470,7 @@ impl AudioManager {
     // ── ME ──────────────────────────────────────────────────────────────
 
     #[instrument(skip(self, source), fields(path = %source.path(), volume))]
-    pub fn me_play(
-        &mut self,
-        source: &AudioSource,
-        volume: i32,
-        pitch: i32,
-    ) -> AudioResult<()> {
+    pub fn me_play(&mut self, source: &AudioSource, volume: i32, pitch: i32) -> AudioResult<()> {
         info!("ME play");
         if let Some(mut h) = self.me_handle.take() {
             h.stop(Tween::default());
@@ -476,7 +480,10 @@ impl AudioManager {
         let mut handle = track
             .play(sound)
             .map_err(|e| crate::AudioError::device(format!("me: {}", e)))?;
-        handle.set_volume(amplitude_to_db(Volume::new(volume).as_f64()), Tween::default());
+        handle.set_volume(
+            amplitude_to_db(Volume::new(volume).as_f64()),
+            Tween::default(),
+        );
         self.me_handle = Some(handle);
 
         // ME/BGM interaction: fade BGM down while ME plays (matching mkxp-z meWatchFun)
@@ -505,12 +512,7 @@ impl AudioManager {
     // ── SE ──────────────────────────────────────────────────────────────
 
     #[instrument(skip(self, source), fields(path = %source.path()))]
-    pub fn se_play(
-        &mut self,
-        source: &AudioSource,
-        volume: i32,
-        pitch: i32,
-    ) -> AudioResult<()> {
+    pub fn se_play(&mut self, source: &AudioSource, volume: i32, pitch: i32) -> AudioResult<()> {
         debug!("SE play");
         if self.se_cache.get(source.path()).is_none() {
             self.se_cache.insert(source.path(), source.data.clone());
@@ -523,7 +525,10 @@ impl AudioManager {
             .kira
             .play(sound)
             .map_err(|e| crate::AudioError::device(format!("se: {}", e)))?;
-        handle.set_volume(amplitude_to_db(Volume::new(volume).as_f64()), Tween::default());
+        handle.set_volume(
+            amplitude_to_db(Volume::new(volume).as_f64()),
+            Tween::default(),
+        );
         self.se_handles.push(handle);
         Ok(())
     }

@@ -10,9 +10,9 @@ cross-platform runtime for RPG Maker XP / VX / VX Ace games.  Licensed GPL-2.0.
 | Crate | File | Tests | Key facts |
 |-------|------|-------|-----------|
 | `mkxp-types` | `crates/mkxp-types/` | 15 unit + 8 doc | Vec2, Color, Rect, BlendMode, MkxpError. Zero non-optional deps. Serde behind feature flag. |
-| `mkxp-config` | `crates/mkxp-config/` | 12 unit + 3 doc | 5-layer config loading (CLI > env > user > game RON > Game.ini). Uses `config` crate. |
+| `mkxp-config` | `crates/mkxp-config/` | 16 unit + 3 doc | 6-layer config loading (env > CLI > user > game RON > Game.ini > reference defaults). Uses `config` crate. |
 | `mkxp-fs` | `crates/mkxp-fs/` | 85 unit + 9 doc | VPath, Mountable trait, FileSystem, RgssArchive, PathCache. Pure Rust, no C deps. |
-| `mkxp-audio` | `crates/mkxp-audio/` | 40 unit + 12 doc | BGM/BGS/ME/SE + MIDI. kira (mixing) + rustysynth (SoundFont MIDI). Zero C deps. |
+| `mkxp-audio` | `crates/mkxp-audio/` | 43 unit + 12 doc | BGM/BGS/ME/SE + MIDI. kira (mixing) + rustysynth (SoundFont MIDI). Zero C deps. |
 | `mkxp-log` | `crates/mkxp-log/` | 23 unit + 13 doc | tracing-based logger. `MkxpLayer` (ISO 8601 + span lifecycle). EnvFilter, Composite targets, From<&Config>. |
 | `mkxp-graphics` | `crates/mkxp-graphics/` | 10 unit | wgpu renderer, fixed game coordinate system, viewport scale modes, temporary demo-state reset API. Does not depend on winit. |
 | `mkxp-gui` | `crates/mkxp-gui/` | 53 unit + 2 doc | Library entry plus thin binary. `lib.rs` exposes `run_demo()` and owns config/logging/event-loop startup; `main.rs` only calls it; `app.rs` owns winit/wgpu bootstrap, runtime config consumption, restart/shutdown, and thread lifecycle logging; `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput`; `render_host.rs` consumes `RenderCommand` on a dedicated render thread and owns frame timing / `GraphicsState::update()`; `script_host.rs` provides the internal `ScriptEngine`/`ScriptContext` boundary and blocks at `FrameSync` without per-frame winit wakeups. |

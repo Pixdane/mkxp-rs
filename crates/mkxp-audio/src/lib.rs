@@ -52,19 +52,19 @@
 //! mkxp-z's behaviour of playing silently without a SoundFont.
 
 mod error;
-mod types;
-mod source;
+mod manager;
 mod midi;
 mod midi_stream;
 mod se_cache;
-mod manager;
+mod source;
+mod types;
 
 pub use error::AudioError;
-pub use types::{Volume, Pitch, AudioResult};
-pub use source::{AudioSource, AudioFormat};
+pub use manager::AudioManager;
 pub use midi::MidiEngine;
 pub use midi_stream::MidiStream;
-pub use manager::AudioManager;
+pub use source::{AudioFormat, AudioSource};
+pub use types::{AudioResult, Pitch, Volume};
 
 #[cfg(test)]
 mod tests {
@@ -103,8 +103,14 @@ mod tests {
 
     #[test]
     fn pitch_clamps_and_converts() {
-        assert_eq!(Pitch::new(200).as_multiplier(), Pitch::new(150).as_multiplier());
-        assert_eq!(Pitch::new(0).as_multiplier(), Pitch::new(50).as_multiplier());
+        assert_eq!(
+            Pitch::new(200).as_multiplier(),
+            Pitch::new(150).as_multiplier()
+        );
+        assert_eq!(
+            Pitch::new(0).as_multiplier(),
+            Pitch::new(50).as_multiplier()
+        );
         assert!((Pitch::new(100).as_multiplier() - 1.0).abs() < f64::EPSILON);
         assert!((Pitch::new(150).as_multiplier() - 1.5).abs() < f64::EPSILON);
         assert!((Pitch::new(50).as_multiplier() - 0.5).abs() < f64::EPSILON);

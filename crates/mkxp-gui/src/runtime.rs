@@ -26,6 +26,9 @@ use crate::render_host::RenderError;
 pub(crate) struct RuntimeConfig {
     pub(crate) window_title: String,
     pub(crate) window_size: (u32, u32),
+    pub(crate) fullscreen: bool,
+    pub(crate) resizable: bool,
+    pub(crate) fixed_aspect_ratio: bool,
     pub(crate) game_size: (u32, u32),
     pub(crate) target_fps: u32,
     pub(crate) vsync: bool,
@@ -49,6 +52,9 @@ impl From<mkxp_config::Config> for RuntimeConfig {
         Self {
             window_title: config.window.title.unwrap_or_default(),
             window_size: positive_size(config.window.size, defaults.window.size),
+            fullscreen: config.window.fullscreen.unwrap_or(false),
+            resizable: config.window.resizable.unwrap_or(true),
+            fixed_aspect_ratio: config.window.fixed_aspect_ratio.unwrap_or(true),
             game_size: positive_size(config.graphics.game_size, defaults.graphics.game_size),
             target_fps: normalize_frame_rate(config.graphics.frame_rate.unwrap_or_default()),
             vsync: config.graphics.vsync.unwrap_or(true),
@@ -249,6 +255,9 @@ mod tests {
 
         assert_eq!(config.window_title, "");
         assert_eq!(config.window_size, (640, 480));
+        assert!(!config.fullscreen);
+        assert!(config.resizable);
+        assert!(config.fixed_aspect_ratio);
         assert_eq!(config.game_size, (640, 480));
         assert_eq!(config.target_fps, 60);
         assert!(config.vsync);
@@ -268,6 +277,9 @@ mod tests {
             window: mkxp_config::config::Window {
                 title: Some("Configured Game".into()),
                 size: Some((1280, 960)),
+                fullscreen: Some(true),
+                resizable: Some(false),
+                fixed_aspect_ratio: Some(false),
                 ..Default::default()
             },
             graphics: mkxp_config::config::Graphics {
@@ -287,6 +299,9 @@ mod tests {
 
         assert_eq!(config.window_title, "Configured Game");
         assert_eq!(config.window_size, (1280, 960));
+        assert!(config.fullscreen);
+        assert!(!config.resizable);
+        assert!(!config.fixed_aspect_ratio);
         assert_eq!(config.game_size, (320, 240));
         assert_eq!(config.target_fps, 120);
         assert!(!config.vsync);

@@ -30,7 +30,9 @@ pub enum BlendMode {
 }
 
 impl From<BlendMode> for u8 {
-    fn from(m: BlendMode) -> Self { m as u8 }
+    fn from(m: BlendMode) -> Self {
+        m as u8
+    }
 }
 
 impl TryFrom<u8> for BlendMode {
@@ -39,8 +41,10 @@ impl TryFrom<u8> for BlendMode {
     /// Converts a `u8` to a `BlendMode`. Returns an error for unknown values.
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         match v {
-            0 => Ok(Self::Normal), 1 => Ok(Self::Addition),
-            2 => Ok(Self::Subtraction), 3 => Ok(Self::Multiply),
+            0 => Ok(Self::Normal),
+            1 => Ok(Self::Addition),
+            2 => Ok(Self::Subtraction),
+            3 => Ok(Self::Multiply),
             _ => Err(MkxpError::Unsupported(format!("unknown blend mode: {v}"))),
         }
     }
@@ -52,8 +56,14 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        assert_eq!(BlendMode::try_from(BlendMode::Addition as u8).unwrap(), BlendMode::Addition);
-        assert_eq!(BlendMode::try_from(BlendMode::Multiply as u8).unwrap(), BlendMode::Multiply);
+        assert_eq!(
+            BlendMode::try_from(BlendMode::Addition as u8).unwrap(),
+            BlendMode::Addition
+        );
+        assert_eq!(
+            BlendMode::try_from(BlendMode::Multiply as u8).unwrap(),
+            BlendMode::Multiply
+        );
     }
 
     #[test]

@@ -11,7 +11,9 @@ pub enum ChildrenMode {
 
 pub trait Drawable {
     fn draw(&self, _id: NodeId, _ctx: &mut DrawContext<'_>) {}
-    fn children_mode(&self) -> ChildrenMode { ChildrenMode::None }
+    fn children_mode(&self) -> ChildrenMode {
+        ChildrenMode::None
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

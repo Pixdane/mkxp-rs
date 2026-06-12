@@ -19,47 +19,70 @@ use std::ops::{Add, Div, Mul, Sub};
 /// assert_eq!(Vec2::new(3.0, 4.0).length(), 5.0);
 /// ```
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
-pub struct Vec2 { pub x: f32, pub y: f32 }
+pub struct Vec2 {
+    pub x: f32,
+    pub y: f32,
+}
 
 impl Vec2 {
     /// Creates a new `Vec2`.
-    pub const fn new(x: f32, y: f32) -> Self { Self { x, y } }
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
 
     /// Returns the zero vector.
-    pub const fn zero() -> Self { Self { x: 0.0, y: 0.0 } }
+    pub const fn zero() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
 
     /// Returns the unit vector `(1, 1)`.
-    pub const fn one() -> Self { Self { x: 1.0, y: 1.0 } }
+    pub const fn one() -> Self {
+        Self { x: 1.0, y: 1.0 }
+    }
 
     /// Dot product.
-    pub fn dot(self, other: Self) -> f32 { self.x * other.x + self.y * other.y }
+    pub fn dot(self, other: Self) -> f32 {
+        self.x * other.x + self.y * other.y
+    }
 
     /// Euclidean length. For squared length (cheaper), use `dot(self, self)`.
-    pub fn length(self) -> f32 { (self.x * self.x + self.y * self.y).sqrt() }
+    pub fn length(self) -> f32 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
 }
 
 impl Add for Vec2 {
     type Output = Self;
-    fn add(self, rhs: Self) -> Self { Self::new(self.x + rhs.x, self.y + rhs.y) }
+    fn add(self, rhs: Self) -> Self {
+        Self::new(self.x + rhs.x, self.y + rhs.y)
+    }
 }
 
 impl Sub for Vec2 {
     type Output = Self;
-    fn sub(self, rhs: Self) -> Self { Self::new(self.x - rhs.x, self.y - rhs.y) }
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(self.x - rhs.x, self.y - rhs.y)
+    }
 }
 
 impl Mul<f32> for Vec2 {
     type Output = Self;
-    fn mul(self, rhs: f32) -> Self { Self::new(self.x * rhs, self.y * rhs) }
+    fn mul(self, rhs: f32) -> Self {
+        Self::new(self.x * rhs, self.y * rhs)
+    }
 }
 
 impl Div<f32> for Vec2 {
     type Output = Self;
-    fn div(self, rhs: f32) -> Self { Self::new(self.x / rhs, self.y / rhs) }
+    fn div(self, rhs: f32) -> Self {
+        Self::new(self.x / rhs, self.y / rhs)
+    }
 }
 
 impl From<Vec2i> for Vec2 {
-    fn from(v: Vec2i) -> Self { Self::new(v.x as f32, v.y as f32) }
+    fn from(v: Vec2i) -> Self {
+        Self::new(v.x as f32, v.y as f32)
+    }
 }
 
 // -- Vec2i --------------------------------------------------------------
@@ -83,19 +106,28 @@ impl From<Vec2i> for Vec2 {
 /// assert_eq!(v, Vec2i::new(3, -1));
 /// ```
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Vec2i { pub x: i32, pub y: i32 }
+pub struct Vec2i {
+    pub x: i32,
+    pub y: i32,
+}
 
 impl Vec2i {
     /// Creates a new `Vec2i`.
-    pub const fn new(x: i32, y: i32) -> Self { Self { x, y } }
+    pub const fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
 
     /// Returns the zero vector.
-    pub const fn zero() -> Self { Self { x: 0, y: 0 } }
+    pub const fn zero() -> Self {
+        Self { x: 0, y: 0 }
+    }
 }
 
 impl From<Vec2> for Vec2i {
     /// Truncates fractional parts towards zero.
-    fn from(v: Vec2) -> Self { Self::new(v.x as i32, v.y as i32) }
+    fn from(v: Vec2) -> Self {
+        Self::new(v.x as i32, v.y as i32)
+    }
 }
 
 #[cfg(test)]

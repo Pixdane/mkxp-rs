@@ -1,7 +1,7 @@
+use crate::AudioResult;
+use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 use std::io::Cursor;
 use std::sync::Arc;
-use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
-use crate::AudioResult;
 
 /// A minimal valid SoundFont 2.04 binary, embedded as a fallback default.
 ///
@@ -61,9 +61,8 @@ impl MidiEngine {
     }
 
     fn load_file(path: &str) -> AudioResult<SoundFont> {
-        let file = std::fs::File::open(path).map_err(|e| {
-            crate::AudioError::soundfont(format!("cannot open {}: {}", path, e))
-        })?;
+        let file = std::fs::File::open(path)
+            .map_err(|e| crate::AudioError::soundfont(format!("cannot open {}: {}", path, e)))?;
         let mut reader = std::io::BufReader::new(file);
         SoundFont::new(&mut reader)
             .map_err(|e| crate::AudioError::soundfont(format!("parse error: {:?}", e)))
