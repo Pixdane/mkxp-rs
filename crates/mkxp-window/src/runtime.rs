@@ -51,7 +51,7 @@ impl From<mkxp_config::Config> for RuntimeConfig {
             window_size: positive_size(config.window.size, defaults.window.size),
             game_size: positive_size(config.graphics.game_size, defaults.graphics.game_size),
             target_fps: normalize_frame_rate(config.graphics.frame_rate.unwrap_or_default()),
-            vsync: config.graphics.vsync.unwrap_or(false),
+            vsync: config.graphics.vsync.unwrap_or(true),
             enable_reset: config.input.enable_reset.unwrap_or(true),
             scripts_path: config.ruby.scripts_path,
             rgss_version: config.ruby.rgss_version,
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(config.window_size, (640, 480));
         assert_eq!(config.game_size, (640, 480));
         assert_eq!(config.target_fps, 60);
-        assert!(!config.vsync);
+        assert!(config.vsync);
         assert!(config.enable_reset);
         assert_eq!(config.scripts_path, None);
         assert_eq!(config.rgss_version.as_deref(), Some("3"));

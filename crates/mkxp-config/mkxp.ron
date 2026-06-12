@@ -38,7 +38,7 @@
 
     graphics: (
         # Vertical synchronisation (prevents screen tearing)
-        vsync: false,
+        vsync: true,
         # Sync frame timing to the display refresh rate.
         # Unlike vsync, this also reports the true frame rate back to Ruby scripts
         # so timers stay accurate. Disabled if the refresh rate cannot be detected.

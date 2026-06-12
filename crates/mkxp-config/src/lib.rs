@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(cfg.window.size, Some((640, 480)));
         assert_eq!(cfg.window.fullscreen, Some(false));
         assert_eq!(cfg.window.resizable, Some(true));
-        assert_eq!(cfg.graphics.vsync, Some(false));
+        assert_eq!(cfg.graphics.vsync, Some(true));
         assert_eq!(cfg.graphics.frame_rate, Some(60));
         assert_eq!(cfg.graphics.game_size, Some((640, 480)));
         assert_eq!(cfg.input.enable_reset, Some(true));

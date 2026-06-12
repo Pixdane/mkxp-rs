@@ -69,7 +69,7 @@ impl Default for Config {
                 frame_skip: Some(false),
             },
             graphics: Graphics {
-                vsync: Some(false),
+                vsync: Some(true),
                 sync_to_refresh_rate: Some(false),
                 frame_rate: Some(60),
                 game_size: Some((640, 480)),

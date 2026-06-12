@@ -55,7 +55,7 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `vsync` | `bool` | `false` | Wait for the display vertical blank before swapping buffers to prevent screen tearing. |
+| `vsync` | `bool` | `true` | Wait for the display vertical blank before swapping buffers to prevent screen tearing. |
 | `sync_to_refresh_rate` | `bool` | `false` | Match frame timing to the display refresh rate, and report the true frame rate back to Ruby scripts. Force-disabled if the refresh rate cannot be determined. |
 | `frame_rate` | `u32` | `60` | Cap the frame rate to this value. `0` disables the render-host FPS gate; nonzero values are clamped to `1..=240`. |
 | `game_size` | `(i32, i32)` | `(640, 480)` | Logical game resolution used for viewport aspect ratio, integer scaling, and script-facing graphics size. |
