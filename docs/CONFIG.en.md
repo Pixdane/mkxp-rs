@@ -26,7 +26,7 @@ Reference examples are located under `crates/mkxp-config/`: `mkxp.ron` and `Game
 
 ## Engine Config (mkxp.ron)
 
-The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field is optional; omitted fields fall back to the Rust `Default` value.
+The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field is optional; omitted fields are merged from lower-priority sources and finally filled from the top-level `Config::default()` reference values.
 
 ### ruby
 
@@ -44,7 +44,7 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `title` | `String` | `""` | Window title. When empty, the value from `Game.ini` Title is used. |
-| `size` | `(i32, i32)` | `(640, 480)` | Logical resolution in pixels. `(0, 0)` uses the RGSS version default. |
+| `size` | `(i32, i32)` | `(640, 480)` | Initial window size in physical pixels. The game logical resolution is `graphics.game_size`. |
 | `fullscreen` | `bool` | `false` | Whether to start in fullscreen mode. Alt+Enter toggles at runtime regardless of this setting. |
 | `resizable` | `bool` | `true` | Whether the user can drag the window edges to change its size. |
 | `fixed_aspect_ratio` | `bool` | `true` | When the window is resized, preserve the game screen aspect ratio with letterboxing. |
@@ -55,9 +55,10 @@ The engine config uses [RON](https://github.com/ron-rs/ron) format. Every field 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `vsync` | `bool` | `false` | Wait for the display vertical blank before swapping buffers to prevent screen tearing. |
+| `vsync` | `bool` | `true` | Wait for the display vertical blank before swapping buffers to prevent screen tearing. |
 | `sync_to_refresh_rate` | `bool` | `false` | Match frame timing to the display refresh rate, and report the true frame rate back to Ruby scripts. Force-disabled if the refresh rate cannot be determined. |
-| `frame_rate` | `u32` | `0` | Cap the frame rate to this value. `0` means no cap. |
+| `frame_rate` | `u32` | `60` | Cap the frame rate to this value. `0` disables the render-host FPS gate; nonzero values are clamped to `1..=240`. |
+| `game_size` | `(i32, i32)` | `(640, 480)` | Logical game resolution used for viewport aspect ratio, integer scaling, and script-facing graphics size. |
 | `scale_mode` | ScaleMode | `"bilinear"` | Default scaling algorithm for screen upscale, downscale, and bitmap scaling. One of `"nearest"` `"bilinear"` `"bicubic"` `"lanczos3"` `"xbrz"`. |
 | `scale_up` | `Option<ScaleMode>` | `None` | Override the screen upscale algorithm. `None` inherits from `scale_mode`. |
 | `scale_down` | `Option<ScaleMode>` | `None` | Override the screen downscale algorithm. |
@@ -172,6 +173,7 @@ mkxp-z defines 3 environment variables: `MKXPZ_WINDOWS_CONSOLE` (enable a consol
 | `MKXP_GRAPHICS__SCALE_MODE` | `graphics.scale_mode` |
 | `MKXP_GRAPHICS__VSYNC` | `graphics.vsync` |
 | `MKXP_GRAPHICS__FRAME_RATE` | `graphics.frame_rate` |
+| `MKXP_GRAPHICS__GAME_SIZE` | `graphics.game_size` (format `640x480`) |
 | `MKXP_PATHS__GAME_FOLDER` | `paths.game_folder` |
 | `MKXP_FONTS__SCALE` | `fonts.scale` |
 | `MKXP_FONTS__HINTING` | `fonts.hinting` |
@@ -205,6 +207,7 @@ mkxp-z recognises only three arguments: `debug`, `test`, and `btest` (source: `c
 | `--scale-mode` | `graphics.scale_mode` |
 | `--no-vsync` | `graphics.vsync` (flag) |
 | `--frame-rate <n>` | `graphics.frame_rate` |
+| `--game-size <WxH>` | `graphics.game_size` |
 | `--font-scale <n>` | `fonts.scale` |
 | `--font-hinting` | `fonts.hinting` |
 | `--no-kerning` | `fonts.kerning` (flag) |

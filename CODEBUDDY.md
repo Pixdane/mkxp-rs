@@ -14,8 +14,10 @@ cross-platform runtime for RPG Maker XP / VX / VX Ace games.  Licensed GPL-2.0.
 | `mkxp-fs` | `crates/mkxp-fs/` | 85 unit + 9 doc | VPath, Mountable trait, FileSystem, RgssArchive, PathCache. Pure Rust, no C deps. |
 | `mkxp-audio` | `crates/mkxp-audio/` | 40 unit + 12 doc | BGM/BGS/ME/SE + MIDI. kira (mixing) + rustysynth (SoundFont MIDI). Zero C deps. |
 | `mkxp-log` | `crates/mkxp-log/` | 23 unit + 13 doc | tracing-based logger. `MkxpLayer` (ISO 8601 + span lifecycle). EnvFilter, Composite targets, From<&Config>. |
+| `mkxp-graphics` | `crates/mkxp-graphics/` | 10 unit | wgpu renderer, fixed game coordinate system, viewport scale modes, temporary demo-state reset API. Does not depend on winit. |
+| `mkxp-gui` | `crates/mkxp-gui/` | 53 unit + 2 doc | Library entry plus thin binary. `lib.rs` exposes `run_demo()` and owns config/logging/event-loop startup; `main.rs` only calls it; `app.rs` owns winit/wgpu bootstrap, runtime config consumption, restart/shutdown, and thread lifecycle logging; `WindowController` owns winit window, muda menu, shortcuts, resize policy, and emits `WindowOutput`; `render_host.rs` consumes `RenderCommand` on a dedicated render thread and owns frame timing / `GraphicsState::update()`; `script_host.rs` provides the internal `ScriptEngine`/`ScriptContext` boundary and blocks at `FrameSync` without per-frame winit wakeups. |
 
-Next crate: `mkxp-graphics` (wgpu renderer), then `mkxp-binding` (magnus Ruby MRI).
+Next major crate: `mkxp-binding` (magnus Ruby MRI).
 
 ## Audio crate — things to know before working on it
 
@@ -263,6 +265,15 @@ direct dependency of `mkxp-log`.  Timestamps use local timezone offset:
 | `docs/AUDIO_DESIGN.md` | Audio system design, mkxp-z vs mkxp-rs audit, all 17 API checks |
 | `docs/TYPES.md` | Foundation type reference |
 | `docs/CONFIG.en.md` | Configuration reference — env var mapping uses `__` separator |
+| `docs/WINDOW_CONTROLLER_DESIGN.md` | WindowController ownership/output boundary and current implementation status |
+| `crates/mkxp-gui/src/window_control.rs` | WindowController — owns window/menu/resize/fullscreen/shortcut state, no wgpu |
+| `crates/mkxp-gui/src/lib.rs` | Library entry — exposes `run_demo()`, loads mkxp-config, initializes mkxp-log, creates winit event loop, selects `App::<DemoScriptEngine>` |
+| `crates/mkxp-gui/src/main.rs` | Thin binary entry — calls `mkxp_gui::run_demo()` |
+| `crates/mkxp-gui/src/app.rs` | winit ApplicationHandler, wgpu bootstrap, RuntimeConfig consumption, WindowOutput → RenderCommand routing, restart/shutdown/thread joins |
+| `crates/mkxp-gui/src/render_host.rs` | Dedicated render thread, RenderCommand receiver, FPS gate, GraphicsState update/error propagation |
+| `crates/mkxp-gui/src/frame_sync.rs` | Script/render frame barrier; script blocks at Graphics.update, render thread waits on Condvar |
+| `crates/mkxp-gui/src/runtime.rs` | RuntimeConfig, SharedRuntime, RuntimeControl, script/render outcome slots, RuntimeEvent |
+| `crates/mkxp-gui/src/error.rs` | WindowError, ScriptError, ScriptExit, panic payload conversion |
 | `crates/mkxp-audio/src/manager.rs` | AudioManager — BGM/BGS/ME/SE + volume layers + ME/BGM interaction |
 | `crates/mkxp-audio/src/midi_stream.rs` | Real-time MIDI streaming via ringbuf + cpal |
 | `crates/mkxp-audio/src/se_cache.rs` | 10MB LRU SE cache (matching mkxp-z SE_CACHE_MEM) |
@@ -318,10 +329,11 @@ mkxp-z only reads `Title` and `Scripts` from Game.ini.  It detects RGSS version
 from the Scripts file extension (`.rxdata`→1, `.rvdata`→2, `.rvdata2`→3), not
 from the `Library` DLL name.  The `RTP` field is never read.
 
-### Apply patch does not work locally
-`apply_patch` and `apply_patch_add_file` consistently abort on file writes in
-this workspace.  Use Python heredocs (`python3 << 'PYEOF'`) to create files.
-Avoid `!` in shell strings — zsh interprets it as history expansion.
+### File editing
+Use `apply_patch` for source, test, configuration, and documentation edits.
+It is confirmed working in this workspace. Avoid shell redirection, heredocs,
+`tee`, `sed -i`, or ad-hoc scripts for manual edits unless a large approved
+mechanical transformation makes `apply_patch` impractical.
 
 ### Config changes from mkxp-z
 - `midi_synth` config option was **removed** (rustysynth is the only MIDI backend).

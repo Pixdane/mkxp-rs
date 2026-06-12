@@ -10,6 +10,10 @@ use serde::Deserialize;
 /// A `None` value means "not set by this source", allowing lower-priority
 /// sources to fill it.
 ///
+/// `Config::default()` returns the reference defaults applied after all
+/// explicit sources are merged. Use [`Config::empty`] when constructing a
+/// single partial source such as CLI flags, environment variables, or tests.
+///
 /// When deserialized from RON or environment variables via the `config`
 /// crate, missing sections are filled with their `Default` impls thanks to
 /// `#[serde(default)]`.
@@ -18,9 +22,12 @@ use serde::Deserialize;
 /// ```rust
 /// use mkxp_config::Config;
 /// let cfg = Config::default();
-/// assert!(cfg.window.title.is_none());
+/// assert_eq!(cfg.graphics.frame_rate, Some(60));
+///
+/// let partial = Config::empty();
+/// assert!(partial.window.title.is_none());
 /// ```
-#[derive(Debug, Clone, Default, Deserialize, Merge)]
+#[derive(Debug, Clone, Deserialize, Merge)]
 pub struct Config {
     #[serde(default)]
     pub ruby: Ruby,
@@ -38,6 +45,114 @@ pub struct Config {
     pub audio: Audio,
     #[serde(default)]
     pub debug: Debug,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            ruby: Ruby {
+                rgss_version: Some("3".into()),
+                preload_scripts: Some(Vec::new()),
+                postload_scripts: Some(Vec::new()),
+                custom_script: None,
+                launch_args: Some(Vec::new()),
+                use_script_names: Some(true),
+                scripts_path: None,
+            },
+            window: Window {
+                title: Some(String::new()),
+                size: Some((640, 480)),
+                fullscreen: Some(false),
+                resizable: Some(true),
+                fixed_aspect_ratio: Some(true),
+                integer_scaling: Some(false),
+                frame_skip: Some(false),
+            },
+            graphics: Graphics {
+                vsync: Some(true),
+                sync_to_refresh_rate: Some(false),
+                frame_rate: Some(60),
+                game_size: Some((640, 480)),
+                scale_mode: Some("bilinear".into()),
+                scale_up: None,
+                scale_down: None,
+                bitmap_scale_up: None,
+                bitmap_scale_down: None,
+                mipmaps: Some(false),
+                bicubic_sharpness: Some(100),
+                xbrz_factor: Some(4.0),
+                hires: Some(Hires {
+                    enabled: Some(false),
+                    factor: Some(4.0),
+                }),
+                enable_blitting: Some(true),
+                max_texture_size: Some(0),
+                pixel_snap: Some(false),
+            },
+            paths: Paths {
+                game_folder: None,
+                rtp: Some(Vec::new()),
+                patches: Some(Vec::new()),
+                icon_path: None,
+            },
+            fonts: Fonts {
+                default_family: Some("Arial".into()),
+                scale: Some(1.0),
+                hinting: Some("none".into()),
+                kerning: Some(false),
+                outline_crop: Some(true),
+                substitutions: Some(Vec::new()),
+                solid: Some(Vec::new()),
+                height_reporting: Some("nominal".into()),
+            },
+            input: Input {
+                key_bindings: Some(Vec::new()),
+                gamepad_bindings: Some(Vec::new()),
+                binding_names: Some(HashMap::new()),
+                enable_reset: Some(true),
+                enable_settings: Some(true),
+            },
+            audio: Audio {
+                master_volume: Some(1.0),
+                bgm_volume: Some(1.0),
+                se_volume: Some(1.0),
+                bgs_volume: Some(1.0),
+                me_volume: Some(1.0),
+                midi_soundfont: None,
+                midi_chorus: Some(false),
+                midi_reverb: Some(false),
+                se_source_count: Some(6),
+                bgm_track_count: Some(1),
+            },
+            debug: Debug {
+                mode: Some(false),
+                console: Some(false),
+                show_fps: Some("none".into()),
+                log_level: None,
+            },
+        }
+    }
+}
+
+impl Config {
+    /// Empty partial configuration with every optional field unset.
+    pub fn empty() -> Self {
+        Self {
+            ruby: Ruby::default(),
+            window: Window::default(),
+            graphics: Graphics::default(),
+            paths: Paths::default(),
+            fonts: Fonts::default(),
+            input: Input::default(),
+            audio: Audio::default(),
+            debug: Debug::default(),
+        }
+    }
+
+    /// Fill unset fields from [`Config::default`].
+    pub fn fill_defaults(&mut self) {
+        self.merge(Self::default());
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Merge)]
@@ -88,6 +203,8 @@ pub struct Graphics {
     #[merge(strategy = merge::option::overwrite_none)]
     pub frame_rate: Option<u32>,
     #[merge(strategy = merge::option::overwrite_none)]
+    pub game_size: Option<(i32, i32)>,
+    #[merge(strategy = merge::option::overwrite_none)]
     pub scale_mode: Option<String>,
     #[merge(strategy = merge::option::overwrite_none)]
     pub scale_up: Option<String>,
@@ -112,7 +229,6 @@ pub struct Graphics {
     #[merge(strategy = merge::option::overwrite_none)]
     pub pixel_snap: Option<bool>,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize, Merge)]
 pub struct Hires {
