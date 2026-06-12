@@ -4,7 +4,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tracing::error;
+use tracing::{debug, error, info};
 use winit::event_loop::EventLoopProxy;
 
 use mkxp_graphics::ViewportScaleMode;
@@ -79,9 +79,10 @@ pub(crate) fn spawn_render_thread(
     proxy: EventLoopProxy<RuntimeEvent>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        debug!("render thread started");
         let result = catch_render_unwind(|| render_loop(&runtime, &commands));
         match result {
-            Ok(()) => {}
+            Ok(()) => info!("render thread stopped"),
             Err(error) => {
                 error!(%error, "render thread exited with error");
                 runtime.record_render_error(error);

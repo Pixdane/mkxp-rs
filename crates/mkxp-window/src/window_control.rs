@@ -415,6 +415,13 @@ impl WindowController {
 
         let (menu, receiver, menu_items) =
             Self::build_menu(config.enable_reset).map_err(WindowControllerError::Menu)?;
+        debug!(
+            title = %config.title,
+            width = config.inner_size.0,
+            height = config.inner_size.1,
+            reset_enabled = config.enable_reset,
+            "window controller created"
+        );
 
         Ok(Self {
             window,

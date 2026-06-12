@@ -606,8 +606,10 @@ The render-host migration is implemented in `mkxp-window`:
 - `app.rs` owns winit `ApplicationHandler`, wgpu bootstrap, runtime config
   consumption, event forwarding, shutdown, and thread joins. Runtime config now
   drives window title/size, target FPS, vsync present mode, and reset enablement.
+  It logs startup, bootstrap, restart, and shutdown milestones through tracing.
 - `render_host.rs` owns `RenderCommand`, render-thread spawn, render timing,
   command draining, `GraphicsState::update()`, and render error propagation.
+  It logs thread start/stop/error lifecycle events without per-frame info logs.
 - `frame_sync.rs` owns the script/render synchronization primitive; the render
   thread waits on `FrameSync::wait_for_ready_or_shutdown()`.
 - `script_host.rs` no longer sends `RuntimeEvent::ScriptFrameReady` for normal

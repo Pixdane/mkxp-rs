@@ -6,6 +6,7 @@ use std::thread::JoinHandle;
 use winit::event_loop::EventLoopProxy;
 
 use mkxp_graphics::GraphicsState;
+use tracing::{debug, error, info};
 
 use crate::error::{ScriptError, ScriptExit, ScriptRunResult, panic_payload_to_string};
 use crate::runtime::{RuntimeConfig, RuntimeEvent, SharedRuntime};
@@ -106,8 +107,13 @@ pub(crate) fn spawn_script_thread<E: ScriptEngine>(
     proxy: EventLoopProxy<RuntimeEvent>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        debug!("script thread started");
         let ctx = ScriptContext::new(runtime.clone());
         let result = catch_script_unwind(|| engine.run(ctx));
+        match &result {
+            Ok(exit) => info!(?exit, "script thread finished"),
+            Err(error) => error!(%error, "script thread failed"),
+        }
         runtime.record_script_result(result);
 
         let _ = proxy.send_event(RuntimeEvent::ScriptExited);

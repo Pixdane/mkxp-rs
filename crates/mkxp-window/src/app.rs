@@ -8,7 +8,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
 use mkxp_types::MkxpError;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::error::{ScriptExit, WindowError};
 use crate::render_host::{RenderCommand, RenderError, spawn_render_thread};
@@ -100,9 +100,11 @@ impl<E: ScriptEngine> ApplicationHandler<RuntimeEvent> for App<E> {
 impl<E: ScriptEngine> App<E> {
     fn try_resumed(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WindowError> {
         if self.runtime.is_some() {
+            debug!("winit resumed after runtime was already initialized");
             return Ok(());
         }
 
+        info!("initializing window runtime");
         let window = WindowController::new(
             event_loop,
             WindowConfig {
@@ -112,7 +114,9 @@ impl<E: ScriptEngine> App<E> {
                 ..Default::default()
             },
         )?;
+        debug!("window controller initialized");
 
+        debug!("creating wgpu instance");
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
@@ -125,15 +129,18 @@ impl<E: ScriptEngine> App<E> {
             // from. The widened lifetime mirrors that explicit ownership.
             std::mem::transmute(instance.create_surface(window.window())?)
         };
+        debug!("wgpu surface created");
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..Default::default()
         }))
         .ok_or_else(|| MkxpError::Init("no suitable GPU adapter".into()))?;
+        debug!("wgpu adapter selected");
 
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))?;
+        debug!("wgpu device acquired");
 
         let surface_capabilities = surface.get_capabilities(&adapter);
         let surface_format = surface_capabilities
@@ -143,6 +150,13 @@ impl<E: ScriptEngine> App<E> {
             .ok_or_else(|| MkxpError::Init("surface reported no supported formats".into()))?;
         let present_mode = select_present_mode(self.config.vsync, &surface_capabilities);
         let size = window.window().inner_size();
+        debug!(
+            width = size.width,
+            height = size.height,
+            format = ?surface_format,
+            present_mode = ?present_mode,
+            "wgpu surface configuration resolved"
+        );
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -162,15 +176,19 @@ impl<E: ScriptEngine> App<E> {
             surface_config,
             self.config.clone(),
         ));
+        info!("shared runtime initialized");
 
         // Create render command channel.
         let (render_tx, render_rx) = mpsc::channel();
+        debug!("render command channel created");
 
         // Spawn the script thread.
+        info!("spawning script thread");
         let script_thread =
             spawn_script_thread(E::default(), runtime.clone(), self.event_loop_proxy.clone());
 
         // Spawn the render thread.
+        info!("spawning render thread");
         let render_thread =
             spawn_render_thread(runtime.clone(), render_rx, self.event_loop_proxy.clone());
 
@@ -180,6 +198,7 @@ impl<E: ScriptEngine> App<E> {
         self.script_thread = Some(script_thread);
         self.window = Some(window);
 
+        info!("window runtime initialized");
         Ok(())
     }
 }
@@ -279,6 +298,7 @@ impl<E: ScriptEngine> App<E> {
         runtime.control.request_restart();
         runtime.frame_sync.reset();
         runtime.frame_sync.wake_all();
+        info!("script restart requested");
     }
 
     fn restart_script_thread(&mut self) {
@@ -291,9 +311,11 @@ impl<E: ScriptEngine> App<E> {
 
         if let Some(handle) = self.script_thread.take() {
             let _ = handle.join();
+            debug!("old script thread joined before restart");
         }
 
         runtime.prepare_script_restart();
+        info!("spawning replacement script thread");
         self.script_thread = Some(spawn_script_thread(
             E::default(),
             runtime,
@@ -327,6 +349,7 @@ impl<E: ScriptEngine> App<E> {
         if let Some(sender) = &self.render_command_sender {
             let _ = sender.send(RenderCommand::Shutdown);
         }
+        debug!("shutdown requested");
     }
 
     fn shutdown(&mut self) {
@@ -335,16 +358,19 @@ impl<E: ScriptEngine> App<E> {
         // Join script thread first so script stops mutating GraphicsState.
         if let Some(handle) = self.script_thread.take() {
             let _ = handle.join();
+            debug!("script thread joined");
         }
 
         // Join render thread so it stops using GraphicsState/surface.
         if let Some(handle) = self.render_thread.take() {
             let _ = handle.join();
+            debug!("render thread joined");
         }
 
         self.render_command_sender.take();
         self.runtime.take();
         self.window.take();
+        info!("window runtime shut down");
     }
 
     pub(crate) fn take_fatal_error(&mut self) -> Option<WindowError> {
